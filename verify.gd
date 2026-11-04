@@ -119,7 +119,7 @@ func _verify_play() -> void:
 				else:
 					await _fire_at_lowest()
 			GameSim.State.SHOOT:
-				if not saved.has("chaos") and host.sim.balls.size() >= 20:
+				if not saved.has("chaos") and host.sim.balls.size() >= 12:
 					saved["chaos"] = true
 					await _shot("07_chaos_ja")
 				await _wait(0.03)
@@ -181,7 +181,8 @@ func _verify_specials() -> void:
 	await _wait(1.2)
 	await _shot("11_boss_and_specials_ja")
 	sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
-	await _wait(0.12)
+	await host.get_tree().process_frame
+	await host.get_tree().process_frame
 	await _shot("12_boss_killed_ja")
 	_check("boss_kill_wipes_field", sim.blocks.is_empty())
 	await _tap_button("pause")

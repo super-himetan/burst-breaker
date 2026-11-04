@@ -831,7 +831,7 @@ func _draw_glow() -> void:
 	for p in particles:
 		var alpha := 1.0 - float(p["t"]) / float(p["life"])
 		var color: Color = p["color"]
-		_glow_sprite(p["pos"], float(p["size"]) * (1.5 + alpha * 2.0), Color(color, alpha * 0.95))
+		_glow_sprite(p["pos"], float(p["size"]) * (2.5 + alpha * 3.5), Color(color.lerp(Color.WHITE, alpha * 0.35), alpha))
 	for c in fly_coins:
 		_glow_sprite(c["pos"], 44.0, Color(UI.GOLD, 0.55))
 
