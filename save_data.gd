@@ -1,20 +1,34 @@
 extends RefCounted
-## Settings and records kept between sessions. A damaged file falls back to defaults.
+## Settings and long-term progress. A damaged file falls back to defaults.
 
 const I18n := preload("res://i18n.gd")
+const Achievements := preload("res://data/achievements.gd")
+const Balls := preload("res://data/balls.gd")
+const Perks := preload("res://data/perks.gd")
+const Shop := preload("res://data/shop.gd")
+
 const DEFAULT_PATH := "user://save.json"
+const COINS_PER_STAR_SQUARED := 400.0
 
 var path := DEFAULT_PATH
 var lang := I18n.DEFAULT_LANG
 var sound := true
 var vibration := true
 var tutorial_done := false
+
+var coins := 0
+var coins_this_life := 0
+var stars := 0
+var shop := {}
 var best_damage := 0
-var best_combo := 0
 var best_stage := 0
-var total_coins := 0
 var wins := 0
 var runs := 0
+var lifetime := {}
+var achievements := {}
+var perks_seen := {}
+var ball_type := "normal"
+var tier := 0
 
 
 func _init(save_path := DEFAULT_PATH) -> void:
@@ -34,12 +48,37 @@ func load_file() -> void:
 	sound = bool(data.get("sound", sound))
 	vibration = bool(data.get("vibration", vibration))
 	tutorial_done = bool(data.get("tutorial_done", tutorial_done))
+	coins = int(data.get("coins", coins))
+	coins_this_life = int(data.get("coins_this_life", coins_this_life))
+	stars = int(data.get("stars", stars))
 	best_damage = int(data.get("best_damage", best_damage))
-	best_combo = int(data.get("best_combo", best_combo))
 	best_stage = int(data.get("best_stage", best_stage))
-	total_coins = int(data.get("total_coins", total_coins))
 	wins = int(data.get("wins", wins))
 	runs = int(data.get("runs", runs))
+	shop = _int_map(data.get("shop", {}), Shop.ITEMS)
+	lifetime = _int_map(data.get("lifetime", {}))
+	achievements = _flag_map(data.get("achievements", {}))
+	perks_seen = _flag_map(data.get("perks_seen", {}))
+	var saved_ball := String(data.get("ball_type", ball_type))
+	ball_type = saved_ball if Balls.BALLS.has(saved_ball) else "normal"
+	tier = int(data.get("tier", tier))
+
+
+func _int_map(value: Variant, allowed := {}) -> Dictionary:
+	var result := {}
+	if value is Dictionary:
+		for key: Variant in value:
+			if allowed.is_empty() or allowed.has(key):
+				result[String(key)] = int(value[key])
+	return result
+
+
+func _flag_map(value: Variant) -> Dictionary:
+	var result := {}
+	if value is Dictionary:
+		for key: Variant in value:
+			result[String(key)] = true
+	return result
 
 
 func save_file() -> bool:
@@ -54,25 +93,173 @@ func save_file() -> bool:
 		"sound": sound,
 		"vibration": vibration,
 		"tutorial_done": tutorial_done,
+		"coins": coins,
+		"coins_this_life": coins_this_life,
+		"stars": stars,
+		"shop": shop,
 		"best_damage": best_damage,
-		"best_combo": best_combo,
 		"best_stage": best_stage,
-		"total_coins": total_coins,
 		"wins": wins,
 		"runs": runs,
+		"lifetime": lifetime,
+		"achievements": achievements,
+		"perks_seen": perks_seen,
+		"ball_type": ball_type,
+		"tier": tier,
 	}, "  "))
 	file.close()
 	return DirAccess.rename_absolute(tmp, path) == OK
 
 
-## Adds a finished or abandoned run. Returns true when a personal best was beaten.
-func record_run(damage: int, combo: int, stage: int, coins: int, won: bool) -> bool:
-	var new_best := damage > best_damage or combo > best_combo or stage > best_stage
+func stat_value(stat: String) -> int:
+	return int(lifetime.get(stat, 0))
+
+
+func run_config(emit_events := true) -> Dictionary:
+	return {
+		"ball_type": ball_type,
+		"tier": tier,
+		"shop": shop,
+		"stars": stars,
+		"unlocked_perks": unlocked_perks(),
+		"tutorial_offer": runs == 0,
+		"emit_events": emit_events,
+	}
+
+
+func has_achievement(id: String) -> bool:
+	return achievements.has(id)
+
+
+func unlocked_perks() -> Array[String]:
+	var list: Array[String] = []
+	for id in Perks.ids():
+		if is_perk_unlocked(id):
+			list.append(id)
+	return list
+
+
+func is_perk_unlocked(id: String) -> bool:
+	if not Perks.starts_locked(id):
+		return true
+	return has_achievement(Achievements.locks_for_perk(id))
+
+
+func is_ball_unlocked(id: String) -> bool:
+	var unlock := String(Balls.BALLS[id]["unlock"])
+	return unlock == "" or has_achievement(unlock)
+
+
+func max_tier() -> int:
+	return stat_value("best_tier")
+
+
+func set_tier(value: int) -> void:
+	tier = clampi(value, 0, max_tier())
+
+
+func shop_level(id: String) -> int:
+	return int(shop.get(id, 0))
+
+
+func shop_cost(id: String) -> int:
+	return Shop.cost(id, shop_level(id))
+
+
+func can_buy(id: String) -> bool:
+	return shop_level(id) < int(Shop.ITEMS[id]["max"]) and coins >= shop_cost(id)
+
+
+func buy(id: String) -> bool:
+	if not can_buy(id):
+		return false
+	coins -= shop_cost(id)
+	shop[id] = shop_level(id) + 1
+	var total_levels := 0
+	for key: String in shop:
+		total_levels += int(shop[key])
+	lifetime["shop_levels"] = maxi(stat_value("shop_levels"), total_levels)
+	return true
+
+
+func stars_on_prestige() -> int:
+	return int(floor(sqrt(coins_this_life / COINS_PER_STAR_SQUARED)))
+
+
+func can_prestige() -> bool:
+	return wins > 0 and stars_on_prestige() > 0
+
+
+## Trades coins and shop levels for stars. Records, achievements and tiers are kept.
+func prestige() -> bool:
+	if not can_prestige():
+		return false
+	stars += stars_on_prestige()
+	lifetime["stars"] = stars
+	coins = 0
+	coins_this_life = 0
+	shop = {}
+	return true
+
+
+func mark_perk_seen(id: String) -> void:
+	perks_seen[id] = true
+	lifetime["perks_seen"] = perks_seen.size()
+
+
+## summary: damage, combo, best_shot, stage, coins, won, tier, ball_type, counters.
+## Returns true when a personal best was beaten.
+func record_run(summary: Dictionary) -> bool:
+	var damage: int = summary["damage"]
+	var combo: int = summary["combo"]
+	var best_shot: int = summary["best_shot"]
+	var stage: int = summary["stage"]
+	var earned: int = summary["coins"]
+	var won: bool = summary["won"]
+	var new_best := damage > best_damage or combo > stat_value("best_combo") or stage > best_stage
 	best_damage = maxi(best_damage, damage)
-	best_combo = maxi(best_combo, combo)
 	best_stage = maxi(best_stage, stage)
-	total_coins += coins
+	coins += earned
+	coins_this_life += earned
 	runs += 1
+	_add_stat("runs", 1)
+	_add_stat("damage", damage)
+	_add_stat("coins", earned)
+	lifetime["best_combo"] = maxi(stat_value("best_combo"), combo)
+	lifetime["best_shot"] = maxi(stat_value("best_shot"), best_shot)
+	var counters: Dictionary = summary.get("counters", {})
+	for key: String in counters:
+		_add_stat(key, int(counters[key]))
 	if won:
 		wins += 1
+		_add_stat("wins", 1)
+		_add_stat("clears_" + String(summary["ball_type"]), 1)
+		var cleared_tier: int = summary["tier"]
+		lifetime["best_tier"] = maxi(stat_value("best_tier"), cleared_tier + 1)
 	return new_best
+
+
+func _add_stat(stat: String, amount: int) -> void:
+	lifetime[stat] = stat_value(stat) + amount
+
+
+## Unlocks anything newly reached and pays its reward. `live` holds the current run's
+## values, so achievements can pop during a run before its totals are recorded.
+func check_achievements(live := {}) -> Array[Dictionary]:
+	var unlocked: Array[Dictionary] = []
+	for entry in Achievements.all():
+		var id: String = entry["id"]
+		if achievements.has(id):
+			continue
+		var stat: String = entry["stat"]
+		var value := stat_value(stat)
+		if live.has(stat):
+			if Achievements.BEST_STATS.has(stat):
+				value = maxi(value, int(live[stat]))
+			else:
+				value += int(live[stat])
+		if value >= int(entry["target"]):
+			achievements[id] = true
+			coins += int(entry["reward_coins"])
+			unlocked.append(entry)
+	return unlocked
