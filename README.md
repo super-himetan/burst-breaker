@@ -18,6 +18,16 @@
 /Applications/Godot.app/Contents/MacOS/Godot --path .
 ```
 
+## iOS への書き出し
+
+Xcode と Godot の書き出しテンプレート、`export_presets.cfg` の `application/app_store_team_id` が必要です。シミュレーターには書き出せないので、実機で確認します。
+
+```bash
+mkdir -p build/ios && touch build/.gdignore && /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-debug iOS build/ios/BurstBreaker.xcodeproj
+```
+
+書き出した `build/ios/BurstBreaker.xcodeproj` を Xcode で開いて、ビルドします。
+
 ## 確認
 
 ルールとデータのテストです。
