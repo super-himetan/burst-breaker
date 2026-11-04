@@ -15,12 +15,17 @@ const AIM_SECONDS := 2.0
 const PICK_SECONDS := 3.0
 const RUN_TIMEOUT_MSEC := 20000
 
+var _shard := 0
+var _shards := 1
+
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	var mode := args[0] if args.size() > 0 else "campaign"
 	var runs := int(args[1]) if args.size() > 1 else 60
 	var seed_value := int(args[2]) if args.size() > 2 else 1
+	_shard = int(args[3]) if args.size() > 3 else 0
+	_shards = int(args[4]) if args.size() > 4 else 1
 	match mode:
 		"campaign":
 			_campaign(runs, seed_value)
@@ -31,12 +36,17 @@ func _init() -> void:
 	quit()
 
 
-## Plays one run. `preferred` is taken whenever offered; other picks are random.
-func _play(config: Dictionary, seed_value: int, preferred := "") -> Dictionary:
+## Plays one run. `given` starts owned at level 2 (or its max); other picks are random.
+func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 	var sim := GameSim.new()
 	var run_config := config.duplicate()
 	run_config["emit_events"] = false
 	sim.new_run(seed_value, run_config)
+	if given != "":
+		sim.levels[given] = mini(2, int(Perks.PERKS[given]["max"]))
+		sim._recompute_stats()
+		sim.rerolls = int(sim.stat("rerolls"))
+		sim.guards = int(sim.stat("guards"))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value * 31 + 7
 	var picks := 0
@@ -53,8 +63,6 @@ func _play(config: Dictionary, seed_value: int, preferred := "") -> Dictionary:
 				for id in sim.choices:
 					seen[id] = true
 				var pick: String = sim.choices[rng.randi_range(0, sim.choices.size() - 1)]
-				if preferred != "" and sim.choices.has(preferred):
-					pick = preferred
 				sim.choose_upgrade(pick)
 			_:
 				break
@@ -74,8 +82,30 @@ func _play(config: Dictionary, seed_value: int, preferred := "") -> Dictionary:
 	}
 
 
-## Aims at the lowest block with a little human-like error.
+## Usually looks for a gap to shoot through, like a person would; otherwise takes the
+## threat at the bottom. Both carry a little human-like error.
 func _aim(sim: GameSim, rng: RandomNumberGenerator) -> Vector2:
+	if rng.randf() < 0.6:
+		return _aim_through_gap(sim, rng)
+	return _aim_at_lowest(sim, rng)
+
+
+func _aim_through_gap(sim: GameSim, rng: RandomNumberGenerator) -> Vector2:
+	var best_dir := Vector2.UP
+	var best_length := -1.0
+	for i in 15:
+		var dir := Vector2.UP.rotated(deg_to_rad(-70.0 + i * 10.0))
+		var points := sim.trace_aim(dir)
+		var length := 0.0
+		for p in range(points.size() - 1):
+			length += points[p].distance_to(points[p + 1])
+		if length > best_length:
+			best_length = length
+			best_dir = dir
+	return best_dir.rotated(rng.randf_range(-0.05, 0.05))
+
+
+func _aim_at_lowest(sim: GameSim, rng: RandomNumberGenerator) -> Vector2:
 	var best := Vector2(360.0, 400.0)
 	var best_y := -1.0
 	for cell: Vector2i in sim.blocks:
@@ -147,7 +177,8 @@ func _campaign(total_runs: int, seed_value: int) -> void:
 		recent_wins.append(won)
 		if recent_wins.size() > 20:
 			recent_wins.pop_front()
-		if won and save.can_prestige() and save.stars_on_prestige() >= maxi(5, save.stars / 2):
+		# A sensible player prestiges once the shop has flattened out and the payoff is real.
+		if save.can_prestige() and save.shop_level("damage") >= 18 and save.stars_on_prestige() >= maxi(3, save.stars / 2):
 			save.prestige()
 		if run <= 10 or run % 10 == 0:
 			var wins := 0
@@ -165,27 +196,27 @@ func _campaign(total_runs: int, seed_value: int) -> void:
 	])
 
 
-## Plays the highest tier while winning, and steps down after a losing streak.
+## Plays the highest tier while winning, and keeps stepping down during a losing streak.
 func _choose_tier(save: SaveData, recent: Array[bool]) -> int:
 	var top := save.max_tier()
-	var checked := mini(recent.size(), 5)
-	var wins := 0
-	for i in checked:
-		wins += 1 if recent[recent.size() - 1 - i] else 0
-	if checked >= 5 and wins == 0:
-		return maxi(top - 1, 0)
-	return top
+	var losses := 0
+	for i in range(recent.size() - 1, -1, -1):
+		if recent[i]:
+			break
+		losses += 1
+	return maxi(top - losses / 2, 0)
 
 
 func _fixed_config() -> Dictionary:
-	return {"tier": 1, "stars": 0, "shop": {"damage": 8, "balls": 3, "crit": 3, "coins": 3}, "unlocked_perks": null}
+	return {"tier": 0, "stars": 0, "shop": {"damage": 10, "balls": 4, "crit": 4}, "unlocked_perks": null}
 
 
 func _perk_table(runs: int, seed_value: int) -> void:
-	print("preferred perk at a mid-game save: tier 1, some shop levels")
 	var rows: Array[Array] = []
-	for id: String in [""] + Perks.ids():
-		if id != "" and Perks.is_evolution(id):
+	var ids: Array = [""] + Perks.ids()
+	for index in ids.size():
+		var id: String = ids[index]
+		if index % _shards != _shard or (id != "" and Perks.is_evolution(id)):
 			continue
 		var wins := 0
 		var damage := 0
@@ -200,8 +231,11 @@ func _perk_table(runs: int, seed_value: int) -> void:
 
 
 func _ball_table(runs: int, seed_value: int) -> void:
-	print("ball type at a mid-game save: tier 1, some shop levels")
-	for id in Balls.ids():
+	var ids := Balls.ids()
+	for index in ids.size():
+		var id := ids[index]
+		if index % _shards != _shard:
+			continue
 		var wins := 0
 		var seconds := 0.0
 		var combo := 0

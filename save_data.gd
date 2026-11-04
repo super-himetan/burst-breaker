@@ -8,7 +8,7 @@ const Perks := preload("res://data/perks.gd")
 const Shop := preload("res://data/shop.gd")
 
 const DEFAULT_PATH := "user://save.json"
-const COINS_PER_STAR_SQUARED := 400.0
+const COINS_PER_STAR_SQUARED := 10000.0
 
 var path := DEFAULT_PATH
 var lang := I18n.DEFAULT_LANG

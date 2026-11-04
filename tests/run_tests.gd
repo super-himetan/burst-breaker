@@ -59,6 +59,10 @@ func _check(ok: bool, label: String) -> void:
 func _sim(seed_value := 1, config := {}) -> GameSim:
 	var sim := GameSim.new()
 	sim.new_run(seed_value, config)
+	# Without a chosen ball, remove the normal ball's bonus so tests can state exact damage.
+	if not config.has("ball_type"):
+		sim._base_stats["damage_pct"] = float(sim._base_stats["damage_pct"]) - 0.4
+		sim._recompute_stats()
 	return sim
 
 
@@ -283,7 +287,7 @@ func _perk_probe(perk: String) -> Dictionary:
 			# The open lanes let balls reach the ceiling.
 			if x % 3 != 2:
 				var fragile := y == 5 or (x + y) % 4 == 0
-				_block(sim, Vector2i(x, y), 3 if fragile else 400, "bomb" if (x + y) % 6 == 0 else "normal")
+				_block(sim, Vector2i(x, y), 3 if fragile else 4000, "bomb" if (x + y) % 6 == 0 else "normal")
 	_block(sim, Vector2i(0, 10), 500)
 	sim.boss_block = null
 	sim.launch_x = _center_x(sim, 3)
@@ -310,7 +314,7 @@ func _test_perk_mechanics() -> void:
 	sim._hit_block_with_ball(Vector2i(3, 2), block, ball)
 	var first := sim.total_damage
 	sim._hit_block_with_ball(Vector2i(3, 2), block, ball)
-	_check(first == 3 and sim.total_damage == 4, "first strike only boosts a ball's first hit")
+	_check(first == 2 and sim.total_damage == 3, "first strike only boosts a ball's first hit")
 
 	sim = _sim()
 	_give(sim, "crit", 1)
@@ -500,7 +504,7 @@ func _test_special_blocks() -> void:
 	sim = _sim()
 	_single_block(sim, Vector2i(3, 2), 1, "treasure")
 	sim._damage_block(Vector2i(3, 2), 1.0)
-	_check(sim.coins >= 15 and sim.counters["treasures"] == 1, "treasure blocks pay out")
+	_check(sim.coins >= 6 and sim.counters["treasures"] == 1, "treasure blocks pay out")
 
 	sim = _sim()
 	var before := sim.shot_ball_count()
@@ -603,7 +607,7 @@ func _test_tiers() -> void:
 	_check(hard_hp > base_hp, "a higher tier means tougher blocks")
 	_check(Tiers.coin_scale(3) > Tiers.coin_scale(1), "a higher tier pays more coins")
 	var t4 := _sim(1, {"tier": 4})
-	_check(t4.ball_count == 7, "tier rules accumulate (fewer balls)")
+	_check(t4.ball_count == 9, "tier rules accumulate (fewer balls)")
 	var t8 := _sim(1, {"tier": 8, "shop": {"reroll": 2}})
 	_check(t8.rerolls == 0, "tier 8 removes free rerolls")
 	var t9 := _sim(1, {"tier": 9})
@@ -638,16 +642,16 @@ func _test_shop_and_prestige() -> void:
 	_check(not data.can_prestige(), "prestige needs a clear first")
 	data.wins = 1
 	var gained := data.stars_on_prestige()
-	_check(gained == 10, "stars follow lifetime coins (%d)" % gained)
+	_check(gained == 2, "stars follow lifetime coins (%d)" % gained)
 	data.lifetime["best_tier"] = 3
 	data.achievements["runs_1"] = true
 	_check(data.prestige(), "prestige works after a clear")
-	_check(data.stars == 10 and data.coins == 0 and data.shop.is_empty() and data.coins_this_life == 0, "prestige resets coins and shop")
+	_check(data.stars == 2 and data.coins == 0 and data.shop.is_empty() and data.coins_this_life == 0, "prestige resets coins and shop")
 	_check(data.max_tier() == 3 and data.has_achievement("runs_1"), "prestige keeps tiers and achievements")
 	_check(not data.can_prestige(), "prestige needs new coins")
 	var starred := _sim(1, {"stars": 10})
 	var c := _single_block(starred, Vector2i(3, 2), 1000)
-	_check(is_equal_approx(starred._scale_damage(10.0, c), 16.0), "stars multiply damage")
+	_check(is_equal_approx(starred._scale_damage(10.0, c), 35.0), "stars multiply damage")
 
 
 func _test_achievements_data() -> void:

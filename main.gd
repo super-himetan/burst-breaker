@@ -770,11 +770,11 @@ func _draw_blocks() -> void:
 		if flash.has(block["id"]):
 			draw_rect(rect, Color(1.0, 1.0, 1.0, clampf(float(flash[block["id"]]), 0.0, 1.0)))
 		if int(block["poison"]) > 0:
-			draw_circle(rect.position + Vector2(rect.size.x - 10.0, 10.0), 6.0, Color("7dff5c"))
+			draw_circle(rect.position + Vector2(rect.size.x - 10.0, 12.0), 6.0, Color("7dff5c"))
 		if block["burning"]:
-			draw_circle(rect.position + Vector2(10.0, 10.0), 6.0, Color("ff6a2b"))
+			draw_circle(rect.position + Vector2(rect.size.x - 10.0, rect.size.y - 12.0), 6.0, Color("ff6a2b"))
 		var hp_text := I18n.format_number(block["hp"])
-		text_center(rect.get_center() + Vector2(0.0, 2.0), hp_text, fit_size(hp_text, 30, rect.size.x - 10.0), COLOR_BG if block["kind"] == "extra_ball" else Color.WHITE)
+		text_center(rect.get_center() + Vector2(0.0, 4.0), hp_text, fit_size(hp_text, 28, rect.size.x - 16.0), COLOR_BG if block["kind"] == "extra_ball" else Color.WHITE)
 
 
 ## Base look of a block, shared with the codex.
@@ -782,24 +782,25 @@ func _draw_block_body(kind: String, rect: Rect2, color: Color) -> void:
 	draw_rect(rect, color)
 	draw_rect(Rect2(rect.position, Vector2(rect.size.x, 7.0)), color.lightened(0.35))
 	draw_rect(Rect2(rect.position + Vector2(0.0, rect.size.y - 7.0), Vector2(rect.size.x, 7.0)), color.darkened(0.3))
-	var c := rect.get_center()
+	# Icons sit in a corner so large HP numbers stay readable.
+	var corner := rect.position + Vector2(13.0, 15.0)
 	match kind:
 		"bomb":
-			draw_circle(c + Vector2(-27.0, 0.0), 8.0, Color("3a1500"))
+			draw_circle(corner, 7.0, Color("3a1500"))
 		"shield":
 			draw_rect(rect, Color("dfe8ff"), false, 5.0)
 		"armor":
 			draw_rect(rect, Color("1b1d26"), false, 7.0)
 		"regen":
-			draw_rect(Rect2(c + Vector2(-34.0, -3.0), Vector2(14.0, 6.0)), Color.WHITE)
-			draw_rect(Rect2(c + Vector2(-30.0, -7.0), Vector2(6.0, 14.0)), Color.WHITE)
+			draw_rect(Rect2(corner + Vector2(-6.0, -2.0), Vector2(12.0, 4.0)), Color.WHITE)
+			draw_rect(Rect2(corner + Vector2(-2.0, -6.0), Vector2(4.0, 12.0)), Color.WHITE)
 		"treasure":
-			draw_rect(Rect2(rect.position + Vector2(0.0, rect.size.y * 0.42), Vector2(rect.size.x, 5.0)), Color("7a5a0a"))
+			draw_rect(Rect2(corner + Vector2(-6.0, -5.0), Vector2(12.0, 10.0)), Color("7a5a0a"))
 		"breeder":
-			draw_circle(c + Vector2(-30.0, -10.0), 5.0, Color.WHITE)
-			draw_circle(c + Vector2(-30.0, 10.0), 5.0, Color.WHITE)
+			draw_circle(corner + Vector2(-3.0, 0.0), 4.0, Color.WHITE)
+			draw_circle(corner + Vector2(6.0, 0.0), 4.0, Color.WHITE)
 		"extra_ball":
-			draw_circle(c + Vector2(-27.0, 0.0), 9.0, Color("4fd1ff"))
+			draw_circle(corner, 7.0, Color("2a8fd0"))
 
 
 func draw_block_icon(kind: String, rect: Rect2) -> void:

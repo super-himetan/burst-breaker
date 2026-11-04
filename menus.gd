@@ -251,10 +251,10 @@ func _any_purchase_available() -> bool:
 
 
 func _wallet_line(y: float) -> void:
-	host.draw_circle(Vector2(BASE_W / 2.0 - 130.0, y), 14.0, COLOR_COIN)
-	host.text_center(Vector2(BASE_W / 2.0 - 60.0, y), num(save.coins), 36, COLOR_COIN)
+	host.draw_circle(Vector2(BASE_W / 2.0 - 170.0, y), 14.0, COLOR_COIN)
+	host.text_left(Vector2(BASE_W / 2.0 - 146.0, y), num(save.coins), 36, COLOR_COIN)
 	if int(save.stars) > 0:
-		host.text_center(Vector2(BASE_W / 2.0 + 90.0, y), "%s %d" % [t("stars"), save.stars], 32, COLOR_STAR)
+		host.text_center(Vector2(BASE_W / 2.0 + 110.0, y), "%s %d" % [t("stars"), save.stars], 32, COLOR_STAR)
 
 
 func _draw_title() -> void:

@@ -26,18 +26,18 @@ const RECALL_TIME := 16.0
 const CHAIN_DELAY := 0.07
 const CRIT_BASE_MULT := 2.5
 const NO_CELL := Vector2i(-9999, -9999)
-const STAR_DAMAGE := 0.06
-const STAR_COINS := 0.06
+const STAR_DAMAGE := 0.25
+const STAR_COINS := 0.25
 
 const STAGES := [
 	{"rows": 3, "waves": 1, "hp_min": 1, "hp_max": 3, "density": 0.65, "specials": {"bomb": 0.1}},
-	{"rows": 3, "waves": 2, "hp_min": 3, "hp_max": 7, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04}},
-	{"rows": 4, "waves": 2, "hp_min": 6, "hp_max": 13, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08}},
-	{"rows": 2, "waves": 0, "hp_min": 9, "hp_max": 18, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"kind": "guardian", "hp": 340, "summon": 2, "every": 3}},
-	{"rows": 5, "waves": 3, "hp_min": 14, "hp_max": 30, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
-	{"rows": 5, "waves": 3, "hp_min": 22, "hp_max": 46, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
-	{"rows": 6, "waves": 3, "hp_min": 32, "hp_max": 66, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
-	{"rows": 3, "waves": 0, "hp_min": 34, "hp_max": 70, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"kind": "overlord", "hp": 2400, "summon": 3, "every": 3}},
+	{"rows": 3, "waves": 2, "hp_min": 3, "hp_max": 8, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04}},
+	{"rows": 4, "waves": 2, "hp_min": 8, "hp_max": 16, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08}},
+	{"rows": 2, "waves": 0, "hp_min": 10, "hp_max": 22, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"kind": "guardian", "hp": 600, "summon": 2, "every": 3}},
+	{"rows": 5, "waves": 3, "hp_min": 24, "hp_max": 50, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
+	{"rows": 5, "waves": 3, "hp_min": 36, "hp_max": 78, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
+	{"rows": 6, "waves": 3, "hp_min": 54, "hp_max": 115, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
+	{"rows": 3, "waves": 0, "hp_min": 60, "hp_max": 120, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"kind": "overlord", "hp": 7000, "summon": 3, "every": 3}},
 ]
 
 const BOSS_SIZE := Vector2i(3, 2)
@@ -64,7 +64,7 @@ var levels := {}
 var stats := {}
 var ball_type := "normal"
 var tier := 0
-var ball_count := 8
+var ball_count := 10
 var bonus_balls := 0
 var launch_x := FIELD_X + FIELD_W / 2.0
 var choices: Array[String] = []
@@ -101,6 +101,7 @@ var _accumulator := 0.0
 var _next_block_id := 1
 var _base_stats := {}
 var _coin_scale := 1.0
+var _coin_carry := 0.5
 var _tutorial_offer := false
 var _stages_cleared := 0
 var _offered_evolutions := {}
@@ -137,6 +138,7 @@ func new_run(seed_value: int, config := {}) -> void:
 	bonus_balls = 0
 	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0}
 	_accumulator = 0.0
+	_coin_carry = 0.5
 	_next_block_id = 1
 	_stages_cleared = 0
 	_offered_evolutions = {}
@@ -591,7 +593,7 @@ func _collide_ball(ball: Ball) -> void:
 
 func _hit_block_with_ball(cell: Vector2i, block: Dictionary, ball: Ball) -> void:
 	var damage := 1.0 + stat("flat_damage") + ball.wall_bonus
-	damage += stat("combo_damage") * floorf(combo / 20.0)
+	damage += stat("combo_damage") * floorf(combo / 10.0)
 	if ball.hits == 0:
 		damage *= 1.0 + stat("first_strike")
 	if ball.temp:
@@ -698,16 +700,15 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
 	var kind: String = block["kind"]
 	_erase_block(block)
 	counters["kills"] += 1
-	var gained := 1.0 + int(block["max_hp"]) / (5.0 * Tiers.hp_scale(tier))
+	var gained := 0.5
 	if kind == "treasure":
-		gained = 15.0 + stage * 8.0
+		gained = 6.0 + stage * 3.0
 		counters["treasures"] += 1
 	if kind == "boss":
-		gained = 80.0 * (stage + 1) * (1.0 + stat("boss_coins"))
+		gained = 25.0 * (stage + 1) * (1.0 + stat("boss_coins"))
 		counters["bosses"] += 1
 		boss_block = null
-	var coin_amount := maxi(int(ceil(gained * (1.0 + stat("coin_pct")) * _coin_scale)), 1)
-	coins += coin_amount
+	var coin_amount := _grant_coins(gained)
 	var center := block_rect(block).get_center()
 	_emit({"type": "kill", "pos": center, "coins": coin_amount, "kind": kind, "bomb": kind == "bomb"})
 	if kind == "extra_ball":
@@ -719,13 +720,21 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
 	_on_kill_effects(cell, kind, flags)
 
 
+## Fractions carry over, so small rewards still add up exactly.
+func _grant_coins(base: float) -> int:
+	_coin_carry += base * (1.0 + stat("coin_pct")) * _coin_scale
+	var amount := int(_coin_carry)
+	_coin_carry -= amount
+	coins += amount
+	return amount
+
+
 ## A dead boss takes its whole court with it: the biggest moment of the run.
 func _wipe_minions() -> void:
 	for block in unique_blocks():
 		_erase_block(block)
 		counters["kills"] += 1
-		var coin_amount := maxi(int(ceil((1.0 + stat("coin_pct")) * _coin_scale)), 1)
-		coins += coin_amount
+		var coin_amount := _grant_coins(0.5)
 		var center := block_rect(block).get_center()
 		_emit({"type": "kill", "pos": center, "coins": coin_amount, "kind": block["kind"], "bomb": true})
 		_emit({"type": "explode", "pos": center, "radius": 1})
@@ -753,7 +762,7 @@ func _on_kill_effects(cell: Vector2i, kind: String, flags: Dictionary) -> void:
 
 
 func _blast_damage() -> float:
-	return (3.0 + stat("flat_damage") + 3.0 * stage) * (1.0 + stat("bomb_damage")) * Tiers.hp_scale(tier) * 0.8
+	return (3.0 + stat("flat_damage") + 3.0 * stage) * (1.0 + stat("bomb_damage")) * sqrt(Tiers.hp_scale(tier)) * 0.8
 
 
 func _strike_random(count: int, damage: float) -> void:

@@ -231,7 +231,7 @@ func _verify_meta_screens() -> void:
 	_check("prestige_can_cancel", save.stars == 0 and save.shop_level("damage") >= 1)
 	await _tap_button("prestige_do")
 	await _tap_button("prestige_yes")
-	_check("prestige_grants_stars", save.stars == 10 and save.shop.is_empty() and save.coins >= 0)
+	_check("prestige_grants_stars", save.stars == 2 and save.shop.is_empty() and save.coins >= 0)
 	await _tap_button("back")
 	await _shot("21_title_after_prestige_ja")
 
