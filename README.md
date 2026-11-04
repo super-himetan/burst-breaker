@@ -18,6 +18,14 @@
 /Applications/Godot.app/Contents/MacOS/Godot --path .
 ```
 
+## Mac 用のビルド
+
+`build/macos/BurstBreaker.app` を作ります。この Mac ではそのまま起動できます。
+
+```bash
+mkdir -p build/macos && touch build/.gdignore && /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release macOS build/macos/BurstBreaker.app
+```
+
 ## iOS への書き出し
 
 Xcode と Godot の書き出しテンプレート、`export_presets.cfg` の `application/app_store_team_id` が必要です。シミュレーターには書き出せないので、実機で確認します。
