@@ -22,6 +22,8 @@ const ACCEPT_INPUT_AFTER := 0.3
 const FONT_LATIN := ["Avenir Next", "Helvetica Neue", "Roboto", "sans-serif"]
 const FONT_JAPANESE := ["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "sans-serif"]
 const SAMPLE_RATE := 22050
+const BURST_WINDUP := 1.15
+const BURST_AFTERGLOW := 1.1
 
 var sim: GameSim
 var save: SaveData
@@ -67,6 +69,10 @@ var last_pop_sound := 0.0
 var last_hit_sound := 0.0
 var next_milestone := 25
 var seen_choices: Array[String] = []
+var burst_windup := -1.0
+var burst_after := 0.0
+var burst_origin := Vector2.ZERO
+var burst_was_ready := false
 
 var font: Font
 var font_body: Font
@@ -235,7 +241,7 @@ func _set_paused(value: bool) -> void:
 
 
 func _can_pause() -> bool:
-	return screen == Menus.Screen.GAME and not paused and sim.state in [GameSim.State.AIM, GameSim.State.SHOOT]
+	return screen == Menus.Screen.GAME and not paused and burst_windup < 0.0 and sim.state in [GameSim.State.AIM, GameSim.State.SHOOT]
 
 
 func is_run_over() -> bool:
@@ -266,6 +272,9 @@ func _start_run() -> void:
 	screen_flash = 0.0
 	next_milestone = 25
 	last_state = -1
+	burst_windup = -1.0
+	burst_after = 0.0
+	burst_was_ready = false
 	_set_screen(Menus.Screen.GAME)
 
 
@@ -350,6 +359,7 @@ func _process(delta: float) -> void:
 	heat = lerpf(heat, target_heat, minf(delta * 5.0, 1.0))
 	background_material.set_shader_parameter("heat", heat)
 	impact = maxf(impact - delta * 0.11, 0.0)
+	burst_after = maxf(burst_after - delta, 0.0)
 	impact_rect.visible = impact > 0.0005
 	impact_material.set_shader_parameter("amount", impact)
 	queue_redraw()
@@ -364,6 +374,13 @@ func _process_game(delta: float) -> void:
 		screen_age = 0.0
 	if not is_run_over():
 		run_seconds += delta
+	if burst_windup >= 0.0:
+		_process_burst_windup(delta)
+		return
+	if sim.can_burst() and not burst_was_ready:
+		burst_was_ready = true
+		toasts.append({"text": t("burst_ready_toast"), "t": 0.0})
+		_play("win", 2.0)
 	if hitstop > 0.0:
 		hitstop -= delta
 	else:
@@ -373,6 +390,39 @@ func _process_game(delta: float) -> void:
 	_note_offered_perks()
 	if is_run_over():
 		_bank_run()
+
+
+func _begin_burst() -> void:
+	if not sim.can_burst():
+		return
+	burst_windup = 0.0
+	burst_origin = Vector2(sim.launch_x, GameSim.LAUNCH_Y)
+	aiming = false
+	_play("charge", 1.0)
+	trauma = 0.25
+
+
+## The game holds its breath while the cut-in plays, then the move lands all at once.
+func _process_burst_windup(delta: float) -> void:
+	burst_windup += delta
+	trauma = maxf(trauma, burst_windup / BURST_WINDUP * 0.35)
+	heat = 1.0
+	if burst_windup < BURST_WINDUP:
+		return
+	burst_windup = -1.0
+	burst_was_ready = false
+	sim.trigger_burst()
+	burst_after = BURST_AFTERGLOW
+	screen_flash = 1.0
+	trauma = 1.0
+	impact = 0.05
+	hitstop = 0.09
+	_play("blast", 0.8)
+	_play("boom", 0.6)
+	if save.vibration and OS.has_feature("mobile"):
+		Input.vibrate_handheld(120)
+	_spawn_particles(burst_origin, Color.WHITE, 120, 1500.0)
+	_consume_events()
 
 
 func _note_offered_perks() -> void:
@@ -418,7 +468,7 @@ func _on_press(p: Vector2) -> void:
 		list_press = p
 		list_last = p
 		return
-	if screen != Menus.Screen.GAME or paused:
+	if screen != Menus.Screen.GAME or paused or burst_windup >= 0.0:
 		return
 	match sim.state:
 		GameSim.State.AIM:
@@ -510,6 +560,8 @@ func _press_button(id: String) -> void:
 			_set_paused(false)
 		"reroll":
 			sim.reroll_choices()
+		"burst":
+			_begin_burst()
 		"to_title":
 			_bank_run()
 			paused = false
@@ -520,6 +572,8 @@ func current_buttons() -> Array[Dictionary]:
 	if screen != Menus.Screen.GAME:
 		return menus.buttons(screen)
 	var list: Array[Dictionary] = []
+	if burst_windup >= 0.0:
+		return list
 	if paused:
 		list.append(_button("resume", Rect2(110.0, 430.0, 500.0, 120.0), t("resume"), "primary"))
 		list.append(_button("settings", Rect2(110.0, 570.0, 500.0, 100.0), t("settings")))
@@ -532,6 +586,8 @@ func current_buttons() -> Array[Dictionary]:
 			list.append(_button("reroll", Rect2(160.0, 1110.0, 400.0, 90.0), t("reroll_button") % sim.rerolls))
 	else:
 		list.append(_button("pause", Rect2(628.0, 4.0, 88.0, 62.0), "", "icon"))
+		if sim.can_burst():
+			list.append(_button("burst", Rect2(120.0, 1140.0, 480.0, 96.0), t("burst_ready"), "burst"))
 	return list
 
 
@@ -579,6 +635,9 @@ func _consume_events() -> void:
 				descend_anim = 1.0
 			"shot_end":
 				on_progress_changed(_live_stats())
+			"burst_end":
+				if not sim.blocks.is_empty():
+					_show_banner(I18n.format_number(e["damage"]), 1.2)
 			"stage_start":
 				if e["boss"]:
 					_show_banner(t("boss_banner"), 1.3)
@@ -802,6 +861,7 @@ func _draw_glow() -> void:
 	canvas = glow_layer
 	if screen != Menus.Screen.GAME or paused:
 		return
+	_draw_burst_light()
 	var ball_color := _ball_color()
 	var radius := sim.ball_radius
 	for ball in sim.balls:
@@ -834,6 +894,33 @@ func _draw_glow() -> void:
 		_glow_sprite(p["pos"], float(p["size"]) * (2.5 + alpha * 3.5), Color(color.lerp(Color.WHITE, alpha * 0.35), alpha))
 	for c in fly_coins:
 		_glow_sprite(c["pos"], 44.0, Color(UI.GOLD, 0.55))
+
+
+## Light rushes into the launcher during the wind-up, then rays and a ring burst out of it.
+func _draw_burst_light() -> void:
+	if burst_windup >= 0.0:
+		var k := clampf(burst_windup / BURST_WINDUP, 0.0, 1.0)
+		var color := _ball_color()
+		_glow_sprite(burst_origin, 180.0 + k * k * 900.0, Color(color, 0.25 + k * 0.6))
+		for i in 42:
+			var angle := float(i) * 2.399 + floorf(time * 12.0) * 0.37 * float(i % 3)
+			var dir := Vector2.from_angle(angle)
+			var reach := 900.0 * (1.0 - fmod(k * 2.5 + float(i) * 0.137, 1.0))
+			glow_layer.draw_line(burst_origin + dir * (reach + 60.0 + k * 90.0), burst_origin + dir * reach, Color(color, 0.25 + k * 0.5), 3.0 + k * 3.0)
+	if burst_after <= 0.0:
+		return
+	var fade := burst_after / BURST_AFTERGLOW
+	var spent := 1.0 - fade
+	var ray_color := _ball_color().lerp(UI.GOLD, 0.35)
+	for i in 14:
+		var angle := float(i) * TAU / 14.0 + time * 0.5
+		var a := burst_origin + Vector2.from_angle(angle - 0.055) * 1800.0
+		var b := burst_origin + Vector2.from_angle(angle + 0.055) * 1800.0
+		glow_layer.draw_colored_polygon(PackedVector2Array([burst_origin, a, b]), Color(ray_color, fade * fade * 0.38))
+	var radius := spent * GameSim.BURST_WAVE_SPEED * BURST_AFTERGLOW
+	glow_layer.draw_arc(burst_origin, radius, 0.0, TAU, 96, Color(1.0, 1.0, 1.0, fade), 8.0 + 46.0 * fade, true)
+	glow_layer.draw_arc(burst_origin, radius * 0.72, 0.0, TAU, 96, Color(ray_color, fade * 0.8), 5.0 + 20.0 * fade, true)
+	_glow_sprite(burst_origin, 1500.0 * fade, Color(ray_color, fade * 0.8))
 
 
 func _glow_sprite(center: Vector2, size: float, color: Color) -> void:
@@ -927,9 +1014,35 @@ func _draw_game_ui() -> void:
 		soft_glow(Vector2(BASE_W / 2.0, 610.0), Vector2(900.0, 340.0), Color(UI.ACCENT, 0.3 * alpha))
 		var size := fit_size(banner_text, int(84.0 * pop), 660.0)
 		text_shadowed(Vector2(BASE_W / 2.0, 610.0), banner_text, size, Color(1.0, 1.0, 1.0, alpha))
+	if burst_windup >= 0.0:
+		_draw_burst_cut_in()
 	if paused:
 		fill_screen(Color(UI.INK, 0.82))
 		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
+
+
+## Cinema bars close in and the move's name slams across the screen.
+func _draw_burst_cut_in() -> void:
+	var view := get_viewport_rect().size
+	var k := clampf(burst_windup / BURST_WINDUP, 0.0, 1.0)
+	var enter := 1.0 - pow(1.0 - clampf(k / 0.25, 0.0, 1.0), 3.0)
+	fill_screen(Color(UI.INK, enter * 0.55))
+	var bar := enter * 170.0
+	canvas.draw_rect(Rect2(-80.0, -y_offset - 80.0, view.x + 160.0, bar + 80.0), Color.BLACK)
+	canvas.draw_rect(Rect2(-80.0, BASE_H + y_offset - bar, view.x + 160.0, bar + 80.0), Color.BLACK)
+	var color := _ball_color().lerp(UI.ACCENT, 0.55)
+	var center_y := 560.0
+	# The band races in, nearly stops so the name can be read, then leaves.
+	var slide := (1.0 - enter) * 900.0 - maxf(k - 0.82, 0.0) / 0.18 * 1000.0
+	var band := Rect2(-80.0 + slide, center_y - 120.0, view.x + 160.0, 240.0)
+	soft_glow(Vector2(BASE_W / 2.0 + slide, center_y), Vector2(1200.0, 600.0), Color(color, 0.55))
+	canvas.draw_rect(band, Color(color, 0.92))
+	canvas.draw_rect(Rect2(band.position, Vector2(band.size.x, 6.0)), Color.WHITE)
+	canvas.draw_rect(Rect2(band.position + Vector2(0.0, band.size.y - 6.0), Vector2(band.size.x, 6.0)), Color.WHITE)
+	var name_text := t("burst_" + sim.ball_type)
+	var creep := (0.5 - k) * 40.0
+	text_center(Vector2(BASE_W / 2.0 + slide + creep, center_y - 66.0), t("burst"), 26, UI.INK, font_label)
+	text_center(Vector2(BASE_W / 2.0 + slide - creep, center_y + 18.0), name_text, fit_size(name_text, 96, 650.0), UI.INK)
 
 
 func _draw_blocks() -> void:
@@ -1093,6 +1206,20 @@ func _draw_hud() -> void:
 	text_center(Vector2(640.0, 98.0), I18n.format_number(sim.coins), coin_size, UI.GOLD)
 	if sim.state == GameSim.State.SHOOT and sim.combo >= 5:
 		_draw_combo()
+	if sim.state in [GameSim.State.AIM, GameSim.State.SHOOT] and not sim.can_burst():
+		_draw_burst_gauge()
+
+
+func _draw_burst_gauge() -> void:
+	var bar := Rect2(170.0, 1250.0, 380.0, 12.0)
+	text_right(bar.position + Vector2(-16.0, 6.0), t("burst"), 16, UI.MUTED, font_label)
+	panel(bar, Color(1.0, 1.0, 1.0, 0.1), 6.0)
+	if sim.burst_charge > 0.0:
+		var color: Color = UI.ramp(sim.burst_charge)
+		var filled := Rect2(bar.position, Vector2(maxf(bar.size.x * sim.burst_charge, 12.0), bar.size.y))
+		soft_glow(filled.end - Vector2(0.0, 6.0), Vector2(70.0, 70.0), Color(color, 0.5))
+		panel(filled, color, 6.0)
+	text_left(bar.end + Vector2(16.0, -6.0), "%d%%" % int(sim.burst_charge * 100.0), 18, UI.MUTED, font_body)
 
 
 ## The combo counter grows, brightens and shifts color as the chain climbs.
@@ -1215,6 +1342,8 @@ func _build_audio() -> void:
 		"pick": _tone(660.0, 0.12, 0.35, "sine", 1600.0),
 		"win": _tone(660.0, 0.35, 0.45, "triangle", 1200.0),
 		"lose": _tone(300.0, 0.5, 0.45, "triangle", -380.0),
+		"charge": _tone(120.0, BURST_WINDUP, 0.5, "triangle", 900.0, true),
+		"blast": _noise(1.1, 0.95),
 	}
 	for i in 14:
 		var player := AudioStreamPlayer.new()
@@ -1230,7 +1359,7 @@ func _play(id: String, pitch: float) -> void:
 	player.play()
 
 
-func _tone(freq: float, duration: float, volume: float, wave: String, sweep := 0.0) -> AudioStreamWAV:
+func _tone(freq: float, duration: float, volume: float, wave: String, sweep := 0.0, swell := false) -> AudioStreamWAV:
 	var count := int(SAMPLE_RATE * duration)
 	var data := PackedByteArray()
 	data.resize(count * 2)
@@ -1240,7 +1369,9 @@ func _tone(freq: float, duration: float, volume: float, wave: String, sweep := 0
 		phase += (freq + sweep * k) / SAMPLE_RATE
 		# A triangle wave is rounder than a square, and sits better with the softer look.
 		var value := sin(phase * TAU) if wave == "sine" else 1.0 - 4.0 * absf(fmod(phase, 1.0) - 0.5)
-		data.encode_s16(i * 2, int(value * volume * (1.0 - float(i) / count) * 32767.0))
+		var progress := float(i) / count
+		var envelope := progress if swell else 1.0 - progress
+		data.encode_s16(i * 2, int(value * volume * envelope * 32767.0))
 	return _wav(data)
 
 

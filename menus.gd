@@ -239,6 +239,12 @@ func draw_buttons(list: Array[Dictionary], time: float) -> void:
 				host.panel(rect, UI.ACCENT, radius)
 				host.panel(Rect2(rect.position + Vector2(10.0, 7.0), Vector2(rect.size.x - 20.0, rect.size.y * 0.42)), Color(1.0, 1.0, 1.0, 0.13), radius * 0.75)
 				host.text_center(rect.get_center(), label, host.fit_size(label, 48, rect.size.x - 60.0), Color.WHITE)
+			"burst":
+				var color: Color = UI.ramp(fmod(time * 0.5, 1.0))
+				var beat := 0.5 + sin(time * 8.0) * 0.5
+				host.soft_glow(rect.get_center(), rect.size * Vector2(1.5, 2.8), Color(color, 0.45 + beat * 0.35))
+				host.panel(rect.grow(beat * 4.0), color, radius + beat * 4.0, Color.WHITE, 3)
+				host.text_center(rect.get_center(), label, host.fit_size(label, 44, rect.size.x - 50.0), UI.INK)
 			"selected":
 				host.panel(rect, UI.TEXT, radius)
 				host.text_center(rect.get_center(), label, host.fit_size(label, 32, rect.size.x - 40.0), UI.INK)
@@ -325,7 +331,9 @@ func _draw_loadout() -> void:
 			var dot := Vector2(50.0 + (i % 2) * 315.0 + 38.0, 145.0 + (i / 2) * 104.0 + 46.0)
 			host.soft_glow_deferred(dot, String(Balls.BALLS[id]["color"]))
 	var desc := t("ball_%s_desc" % save.ball_type)
-	host.text_center(Vector2(BASE_W / 2.0, 618.0), desc, host.fit_size(desc, 28, 640.0), UI.TEXT, host.font_body)
+	host.text_center(Vector2(BASE_W / 2.0, 612.0), desc, host.fit_size(desc, 28, 640.0), UI.TEXT, host.font_body)
+	var move := t("burst_move") % t("burst_" + String(save.ball_type))
+	host.text_center(Vector2(BASE_W / 2.0, 652.0), move, host.fit_size(move, 23, 640.0), UI.GOLD)
 	var tier: int = save.tier
 	var label := t("tier_label") % tier
 	host.text_center(Vector2(BASE_W / 2.0, 700.0), label, 42, UI.ACCENT if tier > 0 else UI.TEXT)

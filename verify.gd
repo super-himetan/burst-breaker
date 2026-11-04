@@ -180,6 +180,7 @@ func _verify_specials() -> void:
 		sim.blocks[cell] = sim._new_block(50 + i * 400, kinds[i], cell)
 	await _wait(1.2)
 	await _shot("11_boss_and_specials_ja")
+	await _verify_burst(sim)
 	sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
 	await host.get_tree().process_frame
 	await host.get_tree().process_frame
@@ -192,6 +193,51 @@ func _verify_specials() -> void:
 		host.show_title_for_verify()
 	await _wait(0.2)
 	_check("back_on_title", host.screen == Menus.Screen.TITLE)
+
+
+func _verify_burst(sim: GameSim) -> void:
+	_check("no_burst_button_when_empty", not _has_button("burst"))
+	sim.burst_charge = 1.0
+	await _wait(0.1)
+	await _shot("24_burst_ready_ja")
+	var rows_before := _lowest_block_row(sim)
+	var boss_hp := int((sim.boss_block as Dictionary)["hp"])
+	await _tap_button("burst")
+	_check("burst_starts_wind_up", host.burst_windup >= 0.0 and sim.burst_charge >= 1.0)
+	_check("no_buttons_during_cut_in", host.current_buttons().is_empty())
+	await _wait(0.2)
+	await _shot("25_burst_cut_in_ja")
+	await _wait_until(func() -> bool: return host.burst_windup < 0.0, 3000)
+	_check("burst_spends_gauge", sim.burst_charge == 0.0 and sim.counters["bursts"] == 1)
+	await _wait(0.03)
+	await _shot("26_burst_impact_ja")
+	await _wait(0.1)
+	await _shot("27_burst_wave_ja")
+	await _wait_until(func() -> bool: return sim.state != GameSim.State.SHOOT, 8000)
+	await _shot("28_burst_after_ja")
+	_check("burst_damages_boss", int((sim.boss_block as Dictionary)["hp"]) < boss_hp)
+	_check("burst_costs_no_turn", _lowest_block_row(sim) <= rows_before)
+	_check("burst_returns_to_aim", sim.state == GameSim.State.AIM)
+
+
+func _lowest_block_row(sim: GameSim) -> int:
+	var row := -1
+	for cell: Vector2i in sim.blocks:
+		row = maxi(row, cell.y)
+	return row
+
+
+func _has_button(id: String) -> bool:
+	for button in host.current_buttons():
+		if button["id"] == id:
+			return true
+	return false
+
+
+func _wait_until(condition: Callable, limit_ms: int) -> void:
+	var started := Time.get_ticks_msec()
+	while not condition.call() and Time.get_ticks_msec() - started < limit_ms:
+		await host.get_tree().process_frame
 
 
 func _verify_meta_screens() -> void:
@@ -254,6 +300,8 @@ func _verify_meta_screens() -> void:
 	await _tap_button("start")
 	await _tap_button("ball_iron")
 	_check("unlocked_ball_selects", save.ball_type == "iron")
+	# The earlier burst may have earned the titan for real, so lock it again for this check.
+	save.achievements.erase("best_shot_4")
 	await _tap_button("ball_titan")
 	_check("locked_ball_stays_locked", save.ball_type == "iron")
 	for i in 12:

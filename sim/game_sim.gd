@@ -28,16 +28,22 @@ const CRIT_BASE_MULT := 2.5
 const NO_CELL := Vector2i(-9999, -9999)
 const STAR_DAMAGE := 0.25
 const STAR_COINS := 0.25
+const BURST_PER_HIT := 1.0 / 260.0
+const BURST_SHOT_CAP := 0.3
+## Starting part-way means even a short run gets to see the move.
+const BURST_START := 0.3
+const BURST_WAVE_SPEED := 1500.0
+const BURST_RAIN_BALLS := 60
 
 const STAGES := [
 	{"rows": 3, "waves": 1, "hp_min": 1, "hp_max": 3, "density": 0.65, "specials": {"bomb": 0.1}},
 	{"rows": 3, "waves": 2, "hp_min": 3, "hp_max": 8, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04}},
 	{"rows": 4, "waves": 2, "hp_min": 8, "hp_max": 16, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08}},
-	{"rows": 2, "waves": 0, "hp_min": 10, "hp_max": 22, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"kind": "guardian", "hp": 600, "summon": 2, "every": 3}},
-	{"rows": 5, "waves": 3, "hp_min": 24, "hp_max": 50, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
-	{"rows": 5, "waves": 3, "hp_min": 36, "hp_max": 78, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
-	{"rows": 6, "waves": 3, "hp_min": 54, "hp_max": 115, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
-	{"rows": 3, "waves": 0, "hp_min": 60, "hp_max": 120, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"kind": "overlord", "hp": 7000, "summon": 3, "every": 3}},
+	{"rows": 2, "waves": 0, "hp_min": 12, "hp_max": 26, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"kind": "guardian", "hp": 700, "summon": 2, "every": 3}},
+	{"rows": 5, "waves": 3, "hp_min": 28, "hp_max": 58, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
+	{"rows": 5, "waves": 3, "hp_min": 42, "hp_max": 90, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
+	{"rows": 6, "waves": 3, "hp_min": 62, "hp_max": 132, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
+	{"rows": 3, "waves": 0, "hp_min": 70, "hp_max": 140, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"kind": "overlord", "hp": 8500, "summon": 3, "every": 3}},
 ]
 
 const BOSS_SIZE := Vector2i(3, 2)
@@ -88,6 +94,7 @@ var best_shot_damage := 0
 var shots := 0
 var sim_time := 0.0
 var counters := {}
+var burst_charge := 0.0
 
 var _rng := RandomNumberGenerator.new()
 var _launch_dir := Vector2.UP
@@ -105,6 +112,8 @@ var _coin_carry := 0.5
 var _tutorial_offer := false
 var _stages_cleared := 0
 var _offered_evolutions := {}
+var _burst_shot := false
+var _burst_shot_gain := 0.0
 
 
 ## config: ball_type, tier, shop ({id: level}), stars, unlocked_perks (null = all),
@@ -136,7 +145,10 @@ func new_run(seed_value: int, config := {}) -> void:
 	shots = 0
 	sim_time = 0.0
 	bonus_balls = 0
-	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0}
+	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0}
+	burst_charge = BURST_START
+	_burst_shot = false
+	_burst_shot_gain = 0.0
 	_accumulator = 0.0
 	_coin_carry = 0.5
 	_next_block_id = 1
@@ -207,11 +219,120 @@ func fire(dir: Vector2) -> bool:
 	_next_launch_x = -1.0
 	_shot_time = 0.0
 	_floor_bounces_left = int(stat("floor_bounces"))
+	_burst_shot_gain = 0.0
 	combo = 0
 	shot_damage = 0
 	shots += 1
 	_emit({"type": "fire"})
 	return true
+
+
+func can_burst() -> bool:
+	return state == State.AIM and burst_charge >= 1.0
+
+
+## Spends a full gauge on the ball type's special move. It costs no turn: blocks stay put.
+func trigger_burst() -> bool:
+	if not can_burst():
+		return false
+	burst_charge = 0.0
+	counters["bursts"] += 1
+	state = State.SHOOT
+	_burst_shot = true
+	_launch_left = 0
+	_next_launch_x = -1.0
+	_shot_time = 0.0
+	combo = 0
+	shot_damage = 0
+	match ball_type:
+		"iron":
+			_burst_meteor()
+		"fire":
+			_burst_inferno()
+		"splitter":
+			_burst_rain()
+		"blaster":
+			_burst_chain()
+		"ghost":
+			_queue_burst_wave(0.22, 0.06, 0.0)
+			_queue_burst_wave(0.22, 0.06, 0.5)
+		"lucky":
+			_queue_burst_wave(0.4, 0.12, 0.0)
+			for block in unique_blocks():
+				_grant_coins(8.0 + 4.0 * stage)
+		"titan":
+			_burst_titanfall()
+		_:
+			_queue_burst_wave(0.4, 0.12, 0.0)
+	_emit({"type": "burst", "ball": ball_type})
+	return true
+
+
+func _queue_burst_wave(share: float, boss_share: float, delay: float) -> void:
+	for block in unique_blocks():
+		_queue_burst_hit(block, share, boss_share, delay)
+
+
+## One hit of the expanding shockwave: it reaches blocks further from the launcher later.
+func _queue_burst_hit(block: Dictionary, share: float, boss_share: float, delay := 0.0) -> void:
+	var center := block_rect(block).get_center()
+	var travel := center.distance_to(Vector2(launch_x, LAUNCH_Y)) / BURST_WAVE_SPEED
+	var used := boss_share if block["kind"] == "boss" else share
+	_pending_blasts.append({"burst": true, "cell": block["origin"], "t": delay + travel, "damage": float(block["max_hp"]) * used, "radius": 1})
+
+
+func _burst_meteor() -> void:
+	var columns: Array[int] = []
+	for col in COLS:
+		columns.append(col)
+	for i in 5:
+		columns.remove_at(_rng.randi_range(0, columns.size() - 1))
+	for block in unique_blocks():
+		var origin: Vector2i = block["origin"]
+		var size: Vector2i = block["size"]
+		for x in range(origin.x, origin.x + size.x):
+			if columns.has(x):
+				_queue_burst_hit(block, 1.0, 0.15)
+				break
+
+
+func _burst_inferno() -> void:
+	for block in unique_blocks():
+		block["poison"] = int(block["poison"]) + 10 + stage * 6
+		block["burning"] = true
+	_queue_burst_wave(0.25, 0.08, 0.0)
+
+
+func _burst_rain() -> void:
+	var power := (2.0 + stage) * sqrt(Tiers.hp_scale(tier))
+	for i in BURST_RAIN_BALLS:
+		if balls.size() >= MAX_BALLS:
+			break
+		var ball := Ball.new()
+		ball.pos = Vector2(_rng.randf_range(FIELD_X + 20.0, FIELD_X + FIELD_W - 20.0), FIELD_Y + ball_radius + 2.0)
+		ball.vel = Vector2.DOWN.rotated(_rng.randf_range(-0.6, 0.6)) * ball_speed
+		ball.temp = true
+		ball.hits = 1
+		ball.wall_bonus = power
+		balls.append(ball)
+
+
+func _burst_chain() -> void:
+	for block in unique_blocks():
+		if block["kind"] != "boss":
+			block["kind"] = "bomb"
+	_queue_burst_wave(0.35, 0.1, 0.0)
+
+
+func _burst_titanfall() -> void:
+	var from_row := _lowest_row() - 2
+	for block in unique_blocks():
+		var origin: Vector2i = block["origin"]
+		var size: Vector2i = block["size"]
+		if origin.y + size.y - 1 >= from_row:
+			_queue_burst_hit(block, 1.0, 0.15)
+		elif block["kind"] == "boss":
+			_queue_burst_hit(block, 0.0, 0.1)
 
 
 func shot_ball_count() -> int:
@@ -667,9 +788,10 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		return
 	var block: Dictionary = blocks[cell]
 	var damage := raw_damage
-	if block["kind"] == "armor":
+	var is_burst: bool = flags.get("burst", false)
+	if block["kind"] == "armor" and not is_burst:
 		damage *= 0.5
-	if block["kind"] == "shield":
+	if block["kind"] == "shield" and not is_burst:
 		damage = 1.0
 	var amount := maxi(int(ceil(damage)), 1)
 	var dealt: int = mini(amount, int(block["hp"]))
@@ -680,6 +802,8 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 	if not flags.get("dot", false):
 		combo += 1
 		best_combo = maxi(best_combo, combo)
+		if not _burst_shot:
+			_charge_burst()
 	if flags.get("poison", false):
 		counters["poison_damage"] += dealt
 	var center := block_rect(block).get_center()
@@ -694,6 +818,14 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 	})
 	if int(block["hp"]) <= 0:
 		_kill_block(cell, block, flags)
+
+
+func _charge_burst() -> void:
+	var gain := minf(BURST_PER_HIT, BURST_SHOT_CAP - _burst_shot_gain)
+	if gain <= 0.0:
+		return
+	_burst_shot_gain += gain
+	burst_charge = minf(burst_charge + gain, 1.0)
 
 
 func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
@@ -798,6 +930,11 @@ func _blast_step(dt: float) -> void:
 func _detonate(blast: Dictionary) -> void:
 	var cell: Vector2i = blast["cell"]
 	var radius: int = blast["radius"]
+	if blast.has("burst"):
+		if blocks.has(cell):
+			_emit({"type": "explode", "pos": block_rect(blocks[cell]).get_center(), "radius": 1})
+			_damage_block(cell, float(blast["damage"]), {"burst": true, "blast": true})
+		return
 	counters["explosions"] += 1
 	_emit({"type": "explode", "pos": cell_rect(cell).get_center(), "radius": radius})
 	var hit_ids := {}
@@ -818,6 +955,9 @@ func _detonate(blast: Dictionary) -> void:
 func _end_shot() -> void:
 	if _next_launch_x >= 0.0:
 		launch_x = _next_launch_x
+	if _burst_shot:
+		_end_burst()
+		return
 	_apply_end_of_shot()
 	if _is_stage_finished():
 		_clear_stage()
@@ -832,6 +972,18 @@ func _end_shot() -> void:
 	_descend()
 	if _check_death():
 		return
+	state = State.AIM
+
+
+func _end_burst() -> void:
+	_burst_shot = false
+	_emit({"type": "burst_end", "damage": shot_damage})
+	if _is_stage_finished():
+		_clear_stage()
+		return
+	if blocks.is_empty():
+		waves_left -= 1
+		_spawn_row(0)
 	state = State.AIM
 
 

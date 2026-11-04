@@ -51,11 +51,17 @@ func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 	rng.seed = seed_value * 31 + 7
 	var picks := 0
 	var seen := {}
+	var first_burst_stage := 0
 	var started := Time.get_ticks_msec()
 	while Time.get_ticks_msec() - started < RUN_TIMEOUT_MSEC:
 		match sim.state:
 			GameSim.State.AIM:
-				sim.fire(_aim(sim, rng))
+				if sim.can_burst():
+					if first_burst_stage == 0:
+						first_burst_stage = sim.stage + 1
+					sim.trigger_burst()
+				else:
+					sim.fire(_aim(sim, rng))
 			GameSim.State.SHOOT:
 				sim.step(DT)
 			GameSim.State.UPGRADE:
@@ -79,6 +85,7 @@ func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 		"counters": sim.counters,
 		"seconds": sim.sim_time + sim.shots * AIM_SECONDS + picks * PICK_SECONDS,
 		"seen": seen,
+		"first_burst_stage": first_burst_stage,
 	}
 
 
@@ -156,6 +163,9 @@ func _campaign(total_runs: int, seed_value: int) -> void:
 	var first_win := -1
 	var recent_wins: Array[bool] = []
 	var seconds_sum := 0.0
+	var bursts_sum := 0
+	var first_burst_stage_sum := 0
+	var runs_with_burst := 0
 	var timeouts := 0
 	print("run  tier  ball      stage  win   time  coins   wallet  stars  shop  ach  perks  winrate20")
 	for run in range(1, total_runs + 1):
@@ -171,6 +181,10 @@ func _campaign(total_runs: int, seed_value: int) -> void:
 		if result["timeout"]:
 			timeouts += 1
 		seconds_sum += float(result["seconds"])
+		bursts_sum += int(result["counters"]["bursts"])
+		if run <= 10:
+			first_burst_stage_sum += int(result["first_burst_stage"])
+			runs_with_burst += 1 if int(result["first_burst_stage"]) > 0 else 0
 		var won: bool = result["won"]
 		if won and first_win < 0:
 			first_win = run
@@ -191,8 +205,9 @@ func _campaign(total_runs: int, seed_value: int) -> void:
 				run, result["tier"], result["ball_type"], result["stage"], "WIN" if won else "-", int(result["seconds"]),
 				result["coins"], save.coins, save.stars, shop_total, save.achievements.size(), save.perks_seen.size(), 100 * wins / recent_wins.size(),
 			])
-	print("first_win=%d max_tier=%d stars=%d achievements=%d avg_run=%ds total_hours=%.1f timeouts=%d" % [
+	print("first_win=%d max_tier=%d stars=%d achievements=%d avg_run=%ds total_hours=%.1f timeouts=%d bursts_per_run=%.1f early_runs_with_burst=%d/10 early_first_burst_stage=%.1f" % [
 		first_win, save.max_tier(), save.stars, save.achievements.size(), int(seconds_sum / total_runs), seconds_sum / 3600.0, timeouts,
+		float(bursts_sum) / total_runs, runs_with_burst, float(first_burst_stage_sum) / maxi(runs_with_burst, 1),
 	])
 
 

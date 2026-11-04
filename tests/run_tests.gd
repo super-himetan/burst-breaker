@@ -37,6 +37,8 @@ func _init() -> void:
 	_test_boss()
 	_test_guard_saves_the_run()
 	_test_ball_types()
+	_test_burst_gauge()
+	_test_burst_moves()
 	_test_tiers()
 	_test_shop_and_prestige()
 	_test_achievements_data()
@@ -595,6 +597,69 @@ func _test_ball_types() -> void:
 	_check(titan.ball_radius > GameSim.BALL_RADIUS, "the titan ball is larger")
 
 
+func _test_burst_gauge() -> void:
+	var sim := _sim()
+	_check(not sim.can_burst() and not sim.trigger_burst(), "burst needs a full gauge")
+	_single_block(sim, Vector2i(3, 2), 99999)
+	sim.burst_charge = 0.0
+	sim.fire(Vector2.UP)
+	for i in 2000:
+		sim._damage_block(Vector2i(3, 2), 1.0)
+	_check(is_equal_approx(sim.burst_charge, GameSim.BURST_SHOT_CAP), "one shot can only charge so much")
+	sim.burst_charge = 1.0
+	sim.state = GameSim.State.SHOOT
+	_check(not sim.can_burst(), "burst waits until the shot ends")
+	sim.state = GameSim.State.AIM
+	_check(sim.can_burst(), "a full gauge allows a burst while aiming")
+	sim.new_run(2)
+	_check(sim.burst_charge == GameSim.BURST_START, "a new run starts the gauge part-way")
+
+
+func _burst_scene(ball: String) -> GameSim:
+	var sim := _sim(4, {"ball_type": ball, "emit_events": false})
+	sim.stage = 3
+	sim._start_stage()
+	_block(sim, Vector2i(0, 9), 100, "shield")
+	_block(sim, Vector2i(1, 9), 100, "armor")
+	sim.burst_charge = 1.0
+	return sim
+
+
+func _test_burst_moves() -> void:
+	for ball in Balls.ids():
+		var sim := _burst_scene(ball)
+		var boss: Dictionary = sim.boss_block
+		var boss_hp := int(boss["hp"])
+		var cells_before := {}
+		for cell: Vector2i in sim.blocks:
+			cells_before[cell] = true
+		var coins_before := sim.coins
+		_check(sim.trigger_burst(), "%s: burst fires" % ball)
+		_check(sim.burst_charge == 0.0 and sim.counters["bursts"] == 1, "%s: burst spends the gauge" % ball)
+		var t := 0.0
+		while sim.state == GameSim.State.SHOOT and t < 40.0:
+			sim.step(DT)
+			t += DT
+		_check(sim.state == GameSim.State.AIM or sim.state == GameSim.State.UPGRADE, "%s: burst finishes (%.1fs)" % [ball, t])
+		_check(sim.total_damage > 0, "%s: burst deals damage (%d)" % [ball, sim.total_damage])
+		var moved_down := false
+		for cell: Vector2i in sim.blocks:
+			moved_down = moved_down or not cells_before.has(cell)
+		_check(not moved_down, "%s: burst costs no turn" % ball)
+		if ball != "iron" and ball != "splitter":
+			_check(int(boss["hp"]) < boss_hp and int(boss["hp"]) > 0, "%s: burst hurts but does not kill the boss" % ball)
+		if ball == "lucky":
+			_check(sim.coins > coins_before, "lucky: jackpot pays coins")
+	var sim := _burst_scene("normal")
+	var shield: Dictionary = sim.blocks[Vector2i(0, 9)]
+	sim.trigger_burst()
+	var t := 0.0
+	while sim.state == GameSim.State.SHOOT and t < 10.0:
+		sim.step(DT)
+		t += DT
+	_check(int(shield["hp"]) < 99, "a burst breaks through shields")
+
+
 func _test_tiers() -> void:
 	var base := _sim(9)
 	var hard := _sim(9, {"tier": 1})
@@ -741,6 +806,8 @@ func _test_text_coverage() -> void:
 		needed.append("tier_rule_" + rule)
 	for stat: String in Achievements.TRACKS:
 		needed.append("ach_" + stat)
+	for id in Balls.ids():
+		needed.append("burst_" + id)
 	for kind in ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]:
 		needed.append("block_" + kind)
 		needed.append("block_%s_desc" % kind)
