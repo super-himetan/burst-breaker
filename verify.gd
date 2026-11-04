@@ -32,6 +32,7 @@ func run() -> void:
 	await _tap_button("start")
 	_check("first_start_skips_loadout", host.screen == Menus.Screen.GAME and host.sim.state == GameSim.State.AIM)
 	await _shot("04_game_start_ja")
+	await _verify_aim_controls()
 	await _verify_pause()
 	await _verify_play()
 	await _verify_end()
@@ -69,6 +70,20 @@ func _verify_settings() -> void:
 	await _tap_button("lang_ja")
 	await _tap_button("back")
 	_check("settings_back_to_title", host.screen == Menus.Screen.TITLE)
+
+
+func _verify_aim_controls() -> void:
+	# Letting go below the launcher cancels instead of firing.
+	await _tap_at(Vector2(360.0, GameSim.LAUNCH_Y + 60.0))
+	_check("release_below_launcher_cancels", host.sim.shots == 0)
+	var target := Vector2(120.0, 500.0)
+	var expected := (target - Vector2(host.sim.launch_x, GameSim.LAUNCH_Y)).normalized()
+	await _tap_at(target)
+	_check("single_tap_fires", host.sim.shots == 1)
+	_check("shot_goes_toward_tap", host.sim._launch_dir.distance_to(expected) < 0.01)
+	while host.sim.state == GameSim.State.SHOOT:
+		await _wait(0.05)
+	host.sim.shots = 0
 
 
 func _verify_pause() -> void:
@@ -323,16 +338,14 @@ func _fire_at_lowest(shot_name := "") -> void:
 		if c.y > best_y:
 			best_y = c.y
 			target = c
-	var aim_dir := (target - Vector2(sim.launch_x, GameSim.LAUNCH_Y)).normalized()
-	var from := Vector2(360.0, 650.0)
-	var to := from - aim_dir * 220.0
-	_touch(from, true)
+	# Touch somewhere else first, then slide to the target: aiming must follow the finger.
+	_touch(Vector2(360.0, 650.0), true)
 	await _wait(0.03)
-	_drag(to)
+	_drag(target)
 	await _wait(0.06)
 	if shot_name != "":
 		await _shot(shot_name)
-	_touch(to, false)
+	_touch(target, false)
 	await _wait(0.03)
 
 

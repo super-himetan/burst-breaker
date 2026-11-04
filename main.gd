@@ -10,30 +10,17 @@ const Verify := preload("res://verify.gd")
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
 const Achievements := preload("res://data/achievements.gd")
+const UI := preload("res://ui_theme.gd")
+const BackgroundShader := preload("res://shaders/background.gdshader")
+const ImpactShader := preload("res://shaders/impact.gdshader")
 
 const BASE_H := 1280.0
 const BASE_W := 720.0
-const MIN_PULL := 30.0
+const MIN_AIM_HEIGHT := 24.0
 const TAP_SLOP := 18.0
 const ACCEPT_INPUT_AFTER := 0.3
-const COLOR_BG := Color("14122b")
-const COLOR_FIELD := Color("1c1a3d")
-const COLOR_BOMB := Color("ff8c1a")
-const COLOR_COIN := Color("ffd84d")
-const COLOR_LABEL := Color("9a96d8")
-const COLOR_BUTTON := Color("2c2860")
-const COLOR_ACCENT := Color("ff5c7a")
-const BLOCK_COLORS := {
-	"bomb": Color("ff8c1a"),
-	"shield": Color("7f93b8"),
-	"regen": Color("35c46e"),
-	"armor": Color("5a5f70"),
-	"treasure": Color("e6b422"),
-	"breeder": Color("a24fd6"),
-	"extra_ball": Color("e9eef7"),
-	"boss": Color("c9213f"),
-}
-const FONT_NAMES := ["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "sans-serif"]
+const FONT_LATIN := ["Avenir Next", "Helvetica Neue", "Roboto", "sans-serif"]
+const FONT_JAPANESE := ["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "sans-serif"]
 const SAMPLE_RATE := 22050
 
 var sim: GameSim
@@ -52,8 +39,8 @@ var screen_age := 0.0
 var last_state := -1
 
 var aiming := false
-var aim_start := Vector2.ZERO
 var aim_current := Vector2.ZERO
+var hovering := false
 var list_press := Vector2.ZERO
 var list_last := Vector2.ZERO
 var list_active := false
@@ -82,6 +69,20 @@ var next_milestone := 25
 var seen_choices: Array[String] = []
 
 var font: Font
+var font_body: Font
+var font_label: Font
+var canvas: CanvasItem
+var glow_layer: Node2D
+var ui_layer: Node2D
+var list_clip: Control
+var glow_texture: Texture2D
+var background_material: ShaderMaterial
+var impact_rect: ColorRect
+var impact_material: ShaderMaterial
+var impact := 0.0
+var heat := 0.0
+var _box := StyleBoxFlat.new()
+var _pending_dots: Array[Dictionary] = []
 var sounds := {}
 var players: Array[AudioStreamPlayer] = []
 var next_player := 0
@@ -89,11 +90,17 @@ var verify_stats := {"max_balls": 0, "explosions": 0, "splits": 0}
 
 
 func _ready() -> void:
-	var system_font := SystemFont.new()
-	system_font.font_names = PackedStringArray(FONT_NAMES)
-	system_font.font_weight = 700
-	font = system_font
-	RenderingServer.set_default_clear_color(COLOR_BG)
+	font = _make_font(800)
+	font_body = _make_font(500)
+	var label_font := FontVariation.new()
+	label_font.base_font = _make_font(700)
+	label_font.spacing_glyph = 3
+	font_label = label_font
+	_box.anti_aliasing = true
+	_box.anti_aliasing_size = 1.2
+	canvas = self
+	RenderingServer.set_default_clear_color(UI.INK)
+	_build_layers()
 	_build_audio()
 	var save_path := SaveData.DEFAULT_PATH
 	var verify_dir := ""
@@ -112,6 +119,75 @@ func _ready() -> void:
 	if verify_dir != "":
 		verifier = Verify.new(self, verify_dir)
 		verifier.run()
+
+
+## Latin text uses a clean geometric face, with Japanese falling back to a matching gothic.
+func _make_font(weight: int) -> Font:
+	var japanese := SystemFont.new()
+	japanese.font_names = PackedStringArray(FONT_JAPANESE)
+	japanese.font_weight = weight
+	var latin := SystemFont.new()
+	latin.font_names = PackedStringArray(FONT_LATIN)
+	latin.font_weight = weight
+	latin.fallbacks = [japanese]
+	return latin
+
+
+func _build_layers() -> void:
+	var back := CanvasLayer.new()
+	back.layer = -1
+	add_child(back)
+	var background := ColorRect.new()
+	background.set_anchors_preset(Control.PRESET_FULL_RECT)
+	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	background_material = ShaderMaterial.new()
+	background_material.shader = BackgroundShader
+	background.material = background_material
+	back.add_child(background)
+
+	glow_layer = Node2D.new()
+	var additive := CanvasItemMaterial.new()
+	additive.blend_mode = CanvasItemMaterial.BLEND_MODE_ADD
+	glow_layer.material = additive
+	glow_layer.draw.connect(_draw_glow)
+	add_child(glow_layer)
+
+	list_clip = Control.new()
+	list_clip.position = Vector2(0.0, Menus.LIST_TOP)
+	list_clip.size = Vector2(BASE_W, Menus.LIST_BOTTOM - Menus.LIST_TOP)
+	list_clip.clip_contents = true
+	list_clip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	list_clip.draw.connect(_draw_list)
+	add_child(list_clip)
+
+	ui_layer = Node2D.new()
+	ui_layer.draw.connect(_draw_ui)
+	add_child(ui_layer)
+
+	var front := CanvasLayer.new()
+	front.layer = 10
+	add_child(front)
+	impact_rect = ColorRect.new()
+	impact_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	impact_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	impact_material = ShaderMaterial.new()
+	impact_material.shader = ImpactShader
+	impact_rect.material = impact_material
+	impact_rect.visible = false
+	front.add_child(impact_rect)
+
+	var gradient := Gradient.new()
+	gradient.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
+	gradient.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+	gradient.add_point(0.35, Color(1.0, 1.0, 1.0, 0.42))
+	var texture := GradientTexture2D.new()
+	texture.gradient = gradient
+	texture.fill = GradientTexture2D.FILL_RADIAL
+	texture.fill_from = Vector2(0.5, 0.5)
+	texture.fill_to = Vector2(0.5, 0.0)
+	texture.width = 128
+	texture.height = 128
+	glow_texture = texture
 
 
 func _notification(what: int) -> void:
@@ -263,9 +339,23 @@ func _process(delta: float) -> void:
 	if screen == Menus.Screen.GAME and not paused:
 		_process_game(delta)
 	_update_fx(delta)
-	var shake := trauma * trauma * 26.0
-	position = Vector2(randf_range(-shake, shake), y_offset + randf_range(-shake, shake))
+	var shake := trauma * trauma * 24.0
+	var offset := Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
+	position = Vector2(0.0, y_offset) + offset
+	# The interface stays steady while the playfield shakes under it.
+	ui_layer.position = -offset
+	list_clip.position = Vector2(0.0, Menus.LIST_TOP) - offset
+	list_clip.visible = menus.is_list_screen(screen)
+	var target_heat := clampf(sim.combo / 90.0, 0.0, 1.0) if screen == Menus.Screen.GAME and sim.state == GameSim.State.SHOOT else 0.0
+	heat = lerpf(heat, target_heat, minf(delta * 5.0, 1.0))
+	background_material.set_shader_parameter("heat", heat)
+	impact = maxf(impact - delta * 0.11, 0.0)
+	impact_rect.visible = impact > 0.0005
+	impact_material.set_shader_parameter("amount", impact)
 	queue_redraw()
+	glow_layer.queue_redraw()
+	ui_layer.queue_redraw()
+	list_clip.queue_redraw()
 
 
 func _process_game(delta: float) -> void:
@@ -308,6 +398,11 @@ func _input(event: InputEvent) -> void:
 			aim_current = p
 		elif list_active:
 			_on_list_drag(p)
+	elif event is InputEventMouseMotion and not DisplayServer.is_touchscreen_available():
+		# With a mouse the aim simply follows the cursor, and a click fires.
+		hovering = true
+		if not aiming:
+			aim_current = event.position - Vector2(0.0, y_offset)
 
 
 func _on_press(p: Vector2) -> void:
@@ -328,7 +423,6 @@ func _on_press(p: Vector2) -> void:
 	match sim.state:
 		GameSim.State.AIM:
 			aiming = true
-			aim_start = p
 			aim_current = p
 		GameSim.State.UPGRADE:
 			if screen_age < ACCEPT_INPUT_AFTER:
@@ -361,12 +455,16 @@ func _on_release(p: Vector2) -> void:
 	if not aiming:
 		return
 	aiming = false
-	var pull := aim_start - p
-	if sim.state == GameSim.State.AIM and pull.length() >= MIN_PULL and pull.y < 0.0:
+	if sim.state == GameSim.State.AIM and _can_aim_at(p):
 		if not save.tutorial_done:
 			save.tutorial_done = true
 			save.save_file()
-		sim.fire(pull)
+		sim.fire(p - Vector2(sim.launch_x, GameSim.LAUNCH_Y))
+
+
+## Letting go below the launcher cancels the shot.
+func _can_aim_at(p: Vector2) -> bool:
+	return p.y < GameSim.LAUNCH_Y - MIN_AIM_HEIGHT
 
 
 func _press_button(id: String) -> void:
@@ -458,16 +556,16 @@ func _consume_events() -> void:
 				verify_stats["splits"] = int(verify_stats["splits"]) + 1
 				_spawn_particles(e["pos"], Color.WHITE, 4, 160.0)
 			"wall":
-				_spawn_particles(e["pos"], Color("7f7ac9"), 2, 90.0)
+				_spawn_particles(e["pos"], UI.MUTED, 2, 90.0)
 			"rebound":
-				_spawn_particles(e["pos"], Color("6dff9e"), 6, 220.0)
+				_spawn_particles(e["pos"], UI.MINT, 6, 220.0)
 			"shock":
 				if bolts.size() < 24:
 					bolts.append({"to": e["pos"], "x": (e["pos"] as Vector2).x + randf_range(-60.0, 60.0), "t": 0.0})
 			"regen":
-				_spawn_particles(e["pos"], BLOCK_COLORS["regen"], 3, 90.0)
+				_spawn_particles(e["pos"], UI.BLOCKS["regen"], 3, 90.0)
 			"breed":
-				_spawn_particles(e["pos"], BLOCK_COLORS["breeder"], 8, 180.0)
+				_spawn_particles(e["pos"], UI.BLOCKS["breeder"], 8, 180.0)
 			"extra_ball":
 				_show_banner("+1", 0.5)
 			"guard":
@@ -520,10 +618,11 @@ func _on_hit(e: Dictionary) -> void:
 			"dot": e["dot"],
 		})
 	if is_crit:
-		_spawn_particles(e["pos"], COLOR_COIN, 8, 300.0)
+		_spawn_particles(e["pos"], UI.GOLD, 8, 300.0)
+		impact = maxf(impact, 0.004)
 	if e["dot"]:
 		return
-	_spawn_particles(e["pos"], _block_color_for_combo(combo), 2, 150.0)
+	_spawn_particles(e["pos"], _combo_color(combo), 2, 150.0)
 	combo_pop = 1.0
 	if time - last_hit_sound > 0.03:
 		last_hit_sound = time
@@ -536,13 +635,14 @@ func _on_hit(e: Dictionary) -> void:
 		_show_banner(t("hits_banner") % next_milestone, 0.9)
 		screen_flash = 0.35
 		trauma = minf(trauma + 0.4, 1.0)
+		impact = maxf(impact, 0.016)
 		_play("win", 1.5)
 		next_milestone = next_milestone * 2
 
 
 func _on_kill(e: Dictionary) -> void:
 	var kind: String = e["kind"]
-	var color: Color = BLOCK_COLORS.get(kind, COLOR_ACCENT)
+	var color: Color = UI.BLOCKS.get(kind, UI.ramp(randf()))
 	var is_boss := kind == "boss"
 	_spawn_particles(e["pos"], color, 70 if is_boss else 16, 900.0 if is_boss else 420.0)
 	_spawn_particles(e["pos"], Color.WHITE, 30 if is_boss else 6, 600.0 if is_boss else 280.0)
@@ -550,6 +650,7 @@ func _on_kill(e: Dictionary) -> void:
 	hitstop = maxf(hitstop, 0.15 if is_boss else 0.012)
 	if is_boss:
 		screen_flash = 1.0
+		impact = 0.03
 		_play("boom", 0.6)
 	if time - last_pop_sound > 0.025:
 		last_pop_sound = time
@@ -570,9 +671,10 @@ func _on_explode(e: Dictionary) -> void:
 	verify_stats["explosions"] = int(verify_stats["explosions"]) + 1
 	if rings.size() < 40:
 		rings.append({"pos": e["pos"], "t": 0.0, "size": 170.0 * int(e.get("radius", 1))})
-	_spawn_particles(e["pos"], COLOR_BOMB, 26, 620.0)
-	_spawn_particles(e["pos"], COLOR_COIN, 14, 420.0)
+	_spawn_particles(e["pos"], UI.BLOCKS["bomb"], 26, 620.0)
+	_spawn_particles(e["pos"], UI.GOLD, 14, 420.0)
 	trauma = minf(trauma + 0.35, 1.0)
+	impact = maxf(impact, 0.009)
 	screen_flash = maxf(screen_flash, 0.14)
 	if time - last_boom_sound > 0.05:
 		last_boom_sound = time
@@ -586,7 +688,7 @@ func _big_celebration() -> void:
 	for i in 14:
 		var pos := Vector2(randf_range(80.0, 640.0), randf_range(240.0, 900.0))
 		rings.append({"pos": pos, "t": -randf() * 0.4, "size": 170.0})
-		_spawn_particles(pos, Color.from_hsv(randf(), 0.8, 1.0), 18, 560.0)
+		_spawn_particles(pos, UI.ramp(randf()), 18, 560.0)
 
 
 func _spawn_particles(pos: Vector2, color: Color, count: int, speed: float) -> void:
@@ -632,7 +734,7 @@ func _update_fx(delta: float) -> void:
 			numbers.remove_at(i)
 		i -= 1
 	i = fly_coins.size() - 1
-	var target := Vector2(650.0, 100.0)
+	var target := Vector2(640.0, 98.0)
 	while i >= 0:
 		var c := fly_coins[i]
 		c["t"] = float(c["t"]) + delta
@@ -672,13 +774,100 @@ func _update_fx(delta: float) -> void:
 
 
 func _draw() -> void:
-	fill_screen(COLOR_BG)
+	canvas = self
+	if screen != Menus.Screen.GAME:
+		return
+	var field := Rect2(GameSim.FIELD_X - 8.0, GameSim.FIELD_Y - 8.0, GameSim.FIELD_W + 16.0, GameSim.LAUNCH_Y - GameSim.FIELD_Y + 42.0)
+	panel(field, Color(0.04, 0.03, 0.1, 0.42), 26.0, UI.LINE, 2)
+	_draw_danger_line()
+	_draw_blocks()
+	_draw_balls()
+	_draw_launcher()
+	if (aiming or hovering) and sim.state == GameSim.State.AIM and not paused:
+		_draw_aim()
+
+
+func _draw_danger_line() -> void:
+	var y := GameSim.FIELD_Y + sim.death_row * GameSim.CELL_H
+	var close := 1.0 - clampf((sim.death_row - sim._lowest_row() - 1) / 4.0, 0.0, 1.0)
+	var alpha := 0.22 + close * (0.45 + sin(time * 7.0) * 0.25)
+	var x := GameSim.FIELD_X + 6.0
+	while x < GameSim.FIELD_X + GameSim.FIELD_W - 6.0:
+		draw_line(Vector2(x, y), Vector2(x + 14.0, y), Color(UI.DANGER, alpha), 3.0)
+		x += 26.0
+
+
+## Everything here is added to the picture as light.
+func _draw_glow() -> void:
+	canvas = glow_layer
+	if screen != Menus.Screen.GAME or paused:
+		return
+	var ball_color := _ball_color()
+	var radius := sim.ball_radius
+	for ball in sim.balls:
+		var color: Color = ball_color.lerp(UI.STAR, 0.7) if ball.temp else ball_color
+		var tail: Vector2 = ball.pos - ball.vel.normalized() * (34.0 + radius * 2.0)
+		glow_layer.draw_line(tail, ball.pos, Color(color, 0.3), radius * 1.3)
+		_glow_sprite(ball.pos, radius * 5.0, Color(color, 0.42))
+	for block in sim.unique_blocks():
+		if block["kind"] == "bomb" or block["kind"] == "treasure":
+			var pulse := 0.5 + sin(time * 4.0 + float(block["id"])) * 0.5
+			_glow_sprite(sim.block_rect(block).get_center(), 100.0, Color(UI.BLOCKS[block["kind"]], 0.1 + pulse * 0.1))
+		elif block["kind"] == "boss":
+			_glow_sprite(sim.block_rect(block).get_center(), 420.0, Color(UI.ACCENT, 0.3 + sin(time * 3.0) * 0.08))
+	for r in rings:
+		if float(r["t"]) < 0.0:
+			continue
+		var k := float(r["t"]) / 0.35
+		_glow_sprite(r["pos"], float(r["size"]) * 1.7 * (0.5 + k), Color(1.0, 0.55, 0.3, (1.0 - k) * 0.65))
+		glow_layer.draw_arc(r["pos"], 40.0 + k * float(r["size"]), 0.0, TAU, 48, Color(1.0, 0.85, 0.6, 1.0 - k), 12.0 * (1.0 - k) + 1.5, true)
+	for b in bolts:
+		var to: Vector2 = b["to"]
+		var from := Vector2(float(b["x"]), GameSim.FIELD_Y)
+		var mid := from.lerp(to, 0.5) + Vector2(randf_range(-30.0, 30.0), 0.0)
+		var alpha := 1.0 - float(b["t"]) / 0.14
+		glow_layer.draw_polyline(PackedVector2Array([from, mid, to]), Color(0.65, 0.9, 1.0, alpha), 4.0, true)
+		_glow_sprite(to, 120.0, Color(0.6, 0.85, 1.0, alpha * 0.7))
+	for p in particles:
+		var alpha := 1.0 - float(p["t"]) / float(p["life"])
+		var color: Color = p["color"]
+		_glow_sprite(p["pos"], float(p["size"]) * (1.5 + alpha * 2.0), Color(color, alpha * 0.95))
+	for c in fly_coins:
+		_glow_sprite(c["pos"], 44.0, Color(UI.GOLD, 0.55))
+
+
+func _glow_sprite(center: Vector2, size: float, color: Color) -> void:
+	canvas.draw_texture_rect(glow_texture, Rect2(center - Vector2(size, size) / 2.0, Vector2(size, size)), false, color)
+
+
+func soft_glow(center: Vector2, size: Vector2, color: Color) -> void:
+	canvas.draw_texture_rect(glow_texture, Rect2(center - size / 2.0, size), false, color)
+
+
+## A colored dot with a halo, used for ball swatches on top of buttons.
+func soft_glow_deferred(center: Vector2, color_code: String) -> void:
+	_pending_dots.append({"pos": center, "color": Color(color_code)})
+
+
+func _draw_ui() -> void:
+	canvas = ui_layer
+	_pending_dots.clear()
 	if screen == Menus.Screen.GAME:
-		_draw_game()
+		_draw_game_ui()
 	else:
 		menus.draw(screen)
 	menus.draw_buttons(current_buttons(), time)
+	for dot in _pending_dots:
+		soft_glow(dot["pos"], Vector2(70.0, 70.0), Color(dot["color"], 0.5))
+		ui_layer.draw_circle(dot["pos"], 13.0, dot["color"])
 	_draw_toast()
+
+
+func _draw_list() -> void:
+	canvas = list_clip
+	list_clip.draw_set_transform(Vector2(0.0, -Menus.LIST_TOP))
+	if menus.is_list_screen(screen):
+		menus.draw_list(screen)
 
 
 func _draw_toast() -> void:
@@ -687,75 +876,60 @@ func _draw_toast() -> void:
 	var toast := toasts[0]
 	var k := float(toast["t"])
 	var slide := clampf(k / 0.2, 0.0, 1.0) * clampf((2.2 - k) / 0.2, 0.0, 1.0)
-	var y := -40.0 + slide * 80.0
-	draw_rect(Rect2(40.0, y - 30.0, 640.0, 60.0), Color(0.05, 0.04, 0.14, 0.94))
-	draw_rect(Rect2(40.0, y - 30.0, 8.0, 60.0), COLOR_COIN)
+	var y := -50.0 + slide * 96.0
+	var rect := Rect2(40.0, y - 33.0, 640.0, 66.0)
+	panel(rect, Color(UI.PANEL_SOLID, 0.97), 33.0, Color(UI.GOLD, 0.7), 2)
 	var text := String(toast["text"])
-	text_center(Vector2(BASE_W / 2.0, y), text, fit_size(text, 28, 600.0), COLOR_COIN)
+	text_center(Vector2(BASE_W / 2.0, y), text, fit_size(text, 26, 590.0), UI.GOLD)
 
 
 func fill_screen(color: Color) -> void:
 	var view := get_viewport_rect().size
-	draw_rect(Rect2(-80.0, -y_offset - 80.0, view.x + 160.0, view.y + 160.0), color)
+	canvas.draw_rect(Rect2(-80.0, -y_offset - 80.0, view.x + 160.0, view.y + 160.0), color)
+
+
+func panel(rect: Rect2, color: Color, radius := 16.0, border := Color.TRANSPARENT, border_width := 0) -> void:
+	_box.bg_color = color
+	_box.set_corner_radius_all(int(radius))
+	_box.border_color = border
+	_box.set_border_width_all(border_width)
+	canvas.draw_style_box(_box, rect)
 
 
 func row(left: Vector2, width: float, label: String, value: String, size: int, value_color: Color) -> void:
-	draw_string(font, left + Vector2(0.0, size * 0.35), label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, COLOR_LABEL)
-	draw_string(font, left + Vector2(0.0, size * 0.35), value, HORIZONTAL_ALIGNMENT_RIGHT, width, size, value_color)
+	canvas.draw_string(font_body, left + Vector2(0.0, size * 0.35), label, HORIZONTAL_ALIGNMENT_LEFT, -1, size, UI.MUTED)
+	canvas.draw_string(font, left + Vector2(0.0, size * 0.35), value, HORIZONTAL_ALIGNMENT_RIGHT, width, size, value_color)
 
 
-func _draw_game() -> void:
-	var heat := clampf(sim.combo / 80.0, 0.0, 1.0) if sim.state == GameSim.State.SHOOT else 0.0
-	var field := Rect2(GameSim.FIELD_X, GameSim.FIELD_Y, GameSim.FIELD_W, GameSim.LAUNCH_Y - GameSim.FIELD_Y + 30.0)
-	draw_rect(field, COLOR_FIELD.lerp(Color("4a1742"), heat))
-	var death_y := GameSim.FIELD_Y + sim.death_row * GameSim.CELL_H
-	draw_line(Vector2(GameSim.FIELD_X, death_y), Vector2(GameSim.FIELD_X + GameSim.FIELD_W, death_y), Color(1.0, 0.3, 0.4, 0.35), 3.0)
-	_draw_blocks()
-	_draw_balls()
-	_draw_launcher()
-	if aiming and sim.state == GameSim.State.AIM:
-		_draw_aim()
-	for r in rings:
-		if float(r["t"]) >= 0.0:
-			var k := float(r["t"]) / 0.35
-			draw_arc(r["pos"], 40.0 + k * float(r["size"]), 0.0, TAU, 40, Color(1.0, 0.75, 0.3, 1.0 - k), 16.0 * (1.0 - k) + 2.0)
-	for b in bolts:
-		var to: Vector2 = b["to"]
-		var from := Vector2(float(b["x"]), GameSim.FIELD_Y)
-		var mid := from.lerp(to, 0.5) + Vector2(randf_range(-30.0, 30.0), 0.0)
-		var alpha := 1.0 - float(b["t"]) / 0.14
-		draw_line(from, mid, Color(0.7, 0.9, 1.0, alpha), 5.0)
-		draw_line(mid, to, Color(0.7, 0.9, 1.0, alpha), 5.0)
-	for p in particles:
-		var alpha := 1.0 - float(p["t"]) / float(p["life"])
-		var color: Color = p["color"]
-		color.a = alpha
-		var s: float = float(p["size"]) * (0.4 + alpha * 0.6)
-		draw_rect(Rect2(p["pos"] - Vector2(s, s) / 2.0, Vector2(s, s)), color)
+func _draw_game_ui() -> void:
 	for c in fly_coins:
-		draw_circle(c["pos"], 9.0, COLOR_COIN)
-		draw_circle(c["pos"], 5.0, Color("c99a1a"))
+		canvas.draw_circle(c["pos"], 8.0, UI.GOLD)
 	for n in numbers:
 		var alpha := 1.0 - float(n["t"]) / 0.55
-		var size := 44 if n["big"] else 26
-		var color := Color(1.0, 0.85, 0.2, alpha) if n["big"] else (Color(0.6, 1.0, 0.6, alpha) if n["dot"] else Color(1.0, 1.0, 1.0, alpha))
+		var rise := clampf(float(n["t"]) / 0.08, 0.0, 1.0)
+		var base_size := 46 if n["big"] else 25
+		var size := int(base_size * (0.7 + rise * 0.3))
+		var color := Color(UI.GOLD, alpha) if n["big"] else (Color(UI.MINT, alpha) if n["dot"] else Color(1.0, 1.0, 1.0, alpha))
 		text_center(n["pos"], str(n["text"]), size, color)
 	_draw_hud()
 	if screen_flash > 0.0:
-		fill_screen(Color(1.0, 1.0, 1.0, screen_flash * 0.5))
+		fill_screen(Color(1.0, 0.96, 0.9, screen_flash * 0.32))
 	match sim.state:
 		GameSim.State.UPGRADE:
 			_draw_upgrade_screen()
 		GameSim.State.WON:
-			_draw_end_screen(t("you_win"), COLOR_COIN)
+			_draw_end_screen(t("you_win"), UI.GOLD)
 		GameSim.State.LOST:
-			_draw_end_screen(t("game_over"), COLOR_ACCENT)
+			_draw_end_screen(t("game_over"), UI.ACCENT)
 	if banner_time > 0.0 and sim.state != GameSim.State.UPGRADE and not paused:
-		var pop := 1.0 + clampf(banner_time - 0.75, 0.0, 0.25) * 2.0
-		text_outlined(Vector2(BASE_W / 2.0, 610.0), banner_text, int(80.0 * pop), Color(1.0, 1.0, 1.0, minf(banner_time * 3.0, 1.0)))
+		var pop := 1.0 + clampf(banner_time - 0.75, 0.0, 0.25) * 1.6
+		var alpha := minf(banner_time * 3.0, 1.0)
+		soft_glow(Vector2(BASE_W / 2.0, 610.0), Vector2(900.0, 340.0), Color(UI.ACCENT, 0.3 * alpha))
+		var size := fit_size(banner_text, int(84.0 * pop), 660.0)
+		text_shadowed(Vector2(BASE_W / 2.0, 610.0), banner_text, size, Color(1.0, 1.0, 1.0, alpha))
 	if paused:
-		fill_screen(Color(0.04, 0.03, 0.1, 0.85))
-		text_outlined(Vector2(BASE_W / 2.0, 310.0), t("paused"), 80, COLOR_COIN)
+		fill_screen(Color(UI.INK, 0.82))
+		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
 
 
 func _draw_blocks() -> void:
@@ -763,93 +937,97 @@ func _draw_blocks() -> void:
 	for block in sim.unique_blocks():
 		var rect := sim.block_rect(block)
 		rect.position.y += slide
-		if block["kind"] == "boss":
+		var kind: String = block["kind"]
+		if kind == "boss":
 			_draw_boss(block, rect)
 			continue
-		_draw_block_body(String(block["kind"]), rect, _block_color(block))
-		if flash.has(block["id"]):
-			draw_rect(rect, Color(1.0, 1.0, 1.0, clampf(float(flash[block["id"]]), 0.0, 1.0)))
+		var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
+		# A struck block swells for a moment, so every hit has weight.
+		var drawn := rect.grow(hit * 3.0)
+		_draw_block_body(kind, drawn, _block_color(block))
+		if hit > 0.0:
+			panel(drawn, Color(1.0, 1.0, 1.0, hit * 0.85), 14.0)
 		if int(block["poison"]) > 0:
-			draw_circle(rect.position + Vector2(rect.size.x - 10.0, 12.0), 6.0, Color("7dff5c"))
+			canvas.draw_circle(rect.position + Vector2(rect.size.x - 11.0, 12.0), 5.0, Color("2f9e44"))
 		if block["burning"]:
-			draw_circle(rect.position + Vector2(rect.size.x - 10.0, rect.size.y - 12.0), 6.0, Color("ff6a2b"))
+			canvas.draw_circle(rect.position + Vector2(rect.size.x - 11.0, rect.size.y - 12.0), 5.0, Color("e8590c"))
 		var hp_text := I18n.format_number(block["hp"])
-		text_center(rect.get_center() + Vector2(0.0, 4.0), hp_text, fit_size(hp_text, 28, rect.size.x - 16.0), COLOR_BG if block["kind"] == "extra_ball" else Color.WHITE)
+		var ink: Color = UI.TEXT if kind == "armor" else UI.INK
+		text_center(rect.get_center() + Vector2(0.0, 2.0), hp_text, fit_size(hp_text, 27, rect.size.x - 20.0), ink)
 
 
 ## Base look of a block, shared with the codex.
 func _draw_block_body(kind: String, rect: Rect2, color: Color) -> void:
-	draw_rect(rect, color)
-	draw_rect(Rect2(rect.position, Vector2(rect.size.x, 7.0)), color.lightened(0.35))
-	draw_rect(Rect2(rect.position + Vector2(0.0, rect.size.y - 7.0), Vector2(rect.size.x, 7.0)), color.darkened(0.3))
+	panel(rect, color, 14.0)
+	panel(Rect2(rect.position + Vector2(4.0, 3.0), Vector2(rect.size.x - 8.0, rect.size.y * 0.4)), Color(1.0, 1.0, 1.0, 0.2), 10.0)
 	# Icons sit in a corner so large HP numbers stay readable.
-	var corner := rect.position + Vector2(13.0, 15.0)
+	var corner := rect.position + Vector2(14.0, 14.0)
 	match kind:
 		"bomb":
-			draw_circle(corner, 7.0, Color("3a1500"))
+			canvas.draw_circle(corner, 6.0, UI.INK)
+			canvas.draw_line(corner + Vector2(3.0, -4.0), corner + Vector2(7.0, -9.0), UI.INK, 2.0)
 		"shield":
-			draw_rect(rect, Color("dfe8ff"), false, 5.0)
+			panel(rect, Color.TRANSPARENT, 14.0, Color.WHITE, 4)
 		"armor":
-			draw_rect(rect, Color("1b1d26"), false, 7.0)
+			panel(rect, Color.TRANSPARENT, 14.0, Color("2b2f45"), 6)
 		"regen":
-			draw_rect(Rect2(corner + Vector2(-6.0, -2.0), Vector2(12.0, 4.0)), Color.WHITE)
-			draw_rect(Rect2(corner + Vector2(-2.0, -6.0), Vector2(4.0, 12.0)), Color.WHITE)
+			canvas.draw_rect(Rect2(corner + Vector2(-6.0, -2.0), Vector2(12.0, 4.0)), UI.INK)
+			canvas.draw_rect(Rect2(corner + Vector2(-2.0, -6.0), Vector2(4.0, 12.0)), UI.INK)
 		"treasure":
-			draw_rect(Rect2(corner + Vector2(-6.0, -5.0), Vector2(12.0, 10.0)), Color("7a5a0a"))
+			panel(Rect2(corner + Vector2(-7.0, -5.0), Vector2(14.0, 11.0)), Color("8a5a00"), 3.0)
 		"breeder":
-			draw_circle(corner + Vector2(-3.0, 0.0), 4.0, Color.WHITE)
-			draw_circle(corner + Vector2(6.0, 0.0), 4.0, Color.WHITE)
+			canvas.draw_circle(corner + Vector2(-3.0, 0.0), 4.0, UI.INK)
+			canvas.draw_circle(corner + Vector2(6.0, 0.0), 4.0, UI.INK)
 		"extra_ball":
-			draw_circle(corner, 7.0, Color("2a8fd0"))
+			canvas.draw_circle(corner, 7.0, Color("3b82f6"))
 
 
 func draw_block_icon(kind: String, rect: Rect2) -> void:
 	if kind == "boss":
-		draw_rect(rect, BLOCK_COLORS["boss"])
+		panel(rect, UI.BLOCKS["boss"], 14.0)
 		_draw_boss_face(rect)
 		return
-	_draw_block_body(kind, rect, BLOCK_COLORS.get(kind, Color("4fa8e8")))
+	_draw_block_body(kind, rect, UI.BLOCKS.get(kind, UI.RAMP[1]))
 
 
 func _draw_boss(block: Dictionary, rect: Rect2) -> void:
-	var enraged := float(block["hp"]) / float(block["max_hp"]) < 0.5
-	var color: Color = BLOCK_COLORS["boss"]
-	if enraged:
-		color = color.lerp(Color("ff7a1a"), 0.5 + sin(time * 10.0) * 0.3)
-	draw_rect(rect, color)
-	draw_rect(Rect2(rect.position, Vector2(rect.size.x, 10.0)), color.lightened(0.35))
-	draw_rect(rect, Color("3a0812"), false, 6.0)
+	var ratio := clampf(float(block["hp"]) / float(block["max_hp"]), 0.0, 1.0)
+	var color: Color = UI.BLOCKS["boss"]
+	if ratio < 0.5:
+		color = color.lerp(Color("ff6b35"), 0.45 + sin(time * 9.0) * 0.3)
+	panel(rect, color, 22.0, Color(1.0, 1.0, 1.0, 0.25), 3)
+	panel(Rect2(rect.position + Vector2(8.0, 6.0), Vector2(rect.size.x - 16.0, rect.size.y * 0.3)), Color(1.0, 1.0, 1.0, 0.1), 14.0)
 	_draw_boss_face(rect)
-	if flash.has(block["id"]):
-		draw_rect(rect, Color(1.0, 1.0, 1.0, clampf(float(flash[block["id"]]) * 0.6, 0.0, 1.0)))
-	var bar := Rect2(rect.position + Vector2(12.0, rect.size.y - 28.0), Vector2(rect.size.x - 24.0, 18.0))
-	draw_rect(bar, Color("3a0812"))
-	draw_rect(Rect2(bar.position, Vector2(bar.size.x * clampf(float(block["hp"]) / float(block["max_hp"]), 0.0, 1.0), bar.size.y)), COLOR_COIN)
-	var hp_text := I18n.format_number(block["hp"])
-	text_outlined(rect.get_center() + Vector2(0.0, -6.0), hp_text, 34, Color.WHITE)
+	var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
+	if hit > 0.0:
+		panel(rect, Color(1.0, 1.0, 1.0, hit * 0.55), 22.0)
+	var bar := Rect2(rect.position + Vector2(18.0, rect.size.y - 26.0), Vector2(rect.size.x - 36.0, 12.0))
+	panel(bar, Color(0.0, 0.0, 0.0, 0.4), 6.0)
+	panel(Rect2(bar.position, Vector2(maxf(bar.size.x * ratio, 12.0), bar.size.y)), UI.GOLD, 6.0)
+	text_center(rect.get_center() + Vector2(0.0, 8.0), I18n.format_number(block["hp"]), 30, Color.WHITE)
 
 
 func _draw_boss_face(rect: Rect2) -> void:
 	var c := rect.get_center()
 	var eye := rect.size.x * 0.2
-	var r := minf(rect.size.y * 0.13, 12.0)
-	draw_circle(c + Vector2(-eye, -rect.size.y * 0.24), r, Color.WHITE)
-	draw_circle(c + Vector2(eye, -rect.size.y * 0.24), r, Color.WHITE)
-	draw_circle(c + Vector2(-eye, -rect.size.y * 0.24), r * 0.5, Color.BLACK)
-	draw_circle(c + Vector2(eye, -rect.size.y * 0.24), r * 0.5, Color.BLACK)
+	var r := minf(rect.size.y * 0.13, 11.0)
+	var y := -rect.size.y * 0.25
+	canvas.draw_circle(c + Vector2(-eye, y), r, Color.WHITE)
+	canvas.draw_circle(c + Vector2(eye, y), r, Color.WHITE)
+	canvas.draw_circle(c + Vector2(-eye, y), r * 0.5, UI.INK)
+	canvas.draw_circle(c + Vector2(eye, y), r * 0.5, UI.INK)
 
 
 func _block_color(block: Dictionary) -> Color:
 	var kind: String = block["kind"]
-	if BLOCK_COLORS.has(kind):
-		return BLOCK_COLORS[kind]
+	if UI.BLOCKS.has(kind):
+		return UI.BLOCKS[kind]
 	var top: float = float(GameSim.STAGES[sim.stage]["hp_max"]) * GameSim.Tiers.hp_scale(sim.tier)
-	var ratio := clampf(float(block["hp"]) / top, 0.0, 1.0)
-	return Color.from_hsv(0.58 - ratio * 0.5, 0.72, 0.95)
+	return UI.ramp(float(block["hp"]) / top)
 
 
-func _block_color_for_combo(combo: int) -> Color:
-	return Color.from_hsv(fmod(combo * 0.021, 1.0), 0.65, 1.0)
+func _combo_color(combo: int) -> Color:
+	return UI.ramp(fmod(combo * 0.018, 1.0))
 
 
 func _ball_color() -> Color:
@@ -860,110 +1038,132 @@ func _draw_balls() -> void:
 	var base := _ball_color()
 	var radius := sim.ball_radius
 	for ball in sim.balls:
-		var tail: Vector2 = ball.pos - ball.vel.normalized() * (24.0 + radius)
-		var color := base.lerp(Color("9be7ff"), 0.6) if ball.temp else base
-		draw_line(tail, ball.pos, Color(color, 0.35), radius)
-		draw_circle(ball.pos, radius, color)
+		var color: Color = base.lerp(UI.STAR, 0.5) if ball.temp else base
+		canvas.draw_circle(ball.pos, radius, color)
 
 
 func _draw_launcher() -> void:
-	var p := Vector2(sim.launch_x, GameSim.LAUNCH_Y)
 	if sim.state != GameSim.State.AIM:
 		return
-	draw_circle(p, sim.ball_radius + 4.0, _ball_color())
-	text_center(p + Vector2(0.0, 44.0), "x%d" % sim.shot_ball_count(), 28, Color.WHITE)
+	var p := Vector2(sim.launch_x, GameSim.LAUNCH_Y)
+	var color := _ball_color()
+	var breathe := 1.0 + sin(time * 4.0) * 0.08
+	soft_glow(p, Vector2(110.0, 110.0) * breathe, Color(color, 0.4))
+	canvas.draw_circle(p, sim.ball_radius + 3.0, color)
+	text_center(p + Vector2(0.0, 44.0), "x%d" % sim.shot_ball_count(), 26, UI.TEXT)
 	if sim.guards > 0:
-		text_center(Vector2(120.0, 1120.0), "GUARD x%d" % sim.guards, 22, Color("6dff9e"))
+		text_center(Vector2(120.0, 1118.0), "GUARD x%d" % sim.guards, 20, UI.MINT, font_label)
 	if not aiming and not save.tutorial_done:
-		var bob := sin(time * 4.0) * 40.0
-		text_outlined(Vector2(BASE_W / 2.0, 1170.0 + bob * 0.2), t("tutorial"), 40, COLOR_COIN)
-		draw_circle(Vector2(BASE_W / 2.0, 900.0 + bob), 22.0, Color(1.0, 1.0, 1.0, 0.75))
+		text_center(Vector2(BASE_W / 2.0, 1180.0), t("tutorial"), 36, UI.GOLD)
+		# A pointer drifts across the field, showing that you aim by pointing.
+		var drift := Vector2(BASE_W / 2.0 + sin(time * 1.8) * 220.0, 640.0 + cos(time * 2.6) * 50.0)
+		soft_glow(drift, Vector2(120.0, 120.0), Color(1.0, 1.0, 1.0, 0.5))
+		canvas.draw_circle(drift, 18.0, Color(1.0, 1.0, 1.0, 0.85))
 
 
 func _draw_aim() -> void:
-	var pull := aim_start - aim_current
-	if pull.length() < MIN_PULL or pull.y >= 0.0:
+	if not _can_aim_at(aim_current):
 		return
-	var points := sim.trace_aim(pull)
-	var dash_phase := fmod(time * 180.0, 36.0)
+	var points := sim.trace_aim(aim_current - Vector2(sim.launch_x, GameSim.LAUNCH_Y))
+	var phase := fmod(time * 180.0, 32.0)
+	var travelled := 0.0
 	for i in range(points.size() - 1):
 		var a := points[i]
 		var b := points[i + 1]
 		var length := a.distance_to(b)
-		var d := dash_phase
+		var d := phase
 		while d < length:
-			draw_circle(a.lerp(b, d / length), 6.0, Color(1.0, 1.0, 1.0, 0.85))
-			d += 36.0
+			var fade := 1.0 - clampf((travelled + d) / 1000.0, 0.0, 0.85)
+			canvas.draw_circle(a.lerp(b, d / length), 2.0 + 4.0 * fade, Color(1.0, 1.0, 1.0, 0.25 + 0.65 * fade))
+			d += 32.0
+		travelled += length
 
 
 func _draw_hud() -> void:
-	text_center(Vector2(95.0, 62.0), t("hud_stage"), 22, COLOR_LABEL)
-	text_center(Vector2(95.0, 100.0), "%d/%d" % [sim.stage + 1, GameSim.STAGES.size()], 40, Color.WHITE)
+	text_center(Vector2(100.0, 58.0), t("hud_stage"), 18, UI.MUTED, font_label)
+	text_center(Vector2(100.0, 98.0), "%d/%d" % [sim.stage + 1, GameSim.STAGES.size()], 38, UI.TEXT)
 	if sim.tier > 0:
-		text_center(Vector2(95.0, 142.0), t("tier_label") % sim.tier, 20, COLOR_ACCENT)
-	text_center(Vector2(BASE_W / 2.0, 62.0), t("hud_damage"), 22, COLOR_LABEL)
-	text_center(Vector2(BASE_W / 2.0, 100.0), I18n.format_number(sim.total_damage), 40, Color.WHITE)
-	var coin_size := int(40.0 + coin_pop * 14.0)
-	draw_circle(Vector2(575.0, 100.0), 14.0, COLOR_COIN)
-	text_center(Vector2(640.0, 100.0), I18n.format_number(sim.coins), coin_size, COLOR_COIN)
+		var chip := Rect2(46.0, 128.0, 108.0, 30.0)
+		panel(chip, Color(UI.ACCENT, 0.2), 15.0)
+		text_center(chip.get_center(), t("tier_label") % sim.tier, fit_size(t("tier_label") % sim.tier, 17, 96.0), UI.ACCENT, font_body)
+	text_center(Vector2(BASE_W / 2.0, 58.0), t("hud_damage"), 18, UI.MUTED, font_label)
+	text_center(Vector2(BASE_W / 2.0, 98.0), I18n.format_number(sim.total_damage), 38, UI.TEXT)
+	var coin_size := int(36.0 + coin_pop * 14.0)
+	canvas.draw_circle(Vector2(575.0, 98.0), 13.0, UI.GOLD)
+	text_center(Vector2(640.0, 98.0), I18n.format_number(sim.coins), coin_size, UI.GOLD)
 	if sim.state == GameSim.State.SHOOT and sim.combo >= 5:
-		var pop := 1.0 + combo_pop * 0.35
-		var color := Color.from_hsv(fmod(time * 0.8, 1.0), 0.6, 1.0)
-		text_outlined(Vector2(BASE_W / 2.0, 1160.0), t("hits") % sim.combo, int(minf(46.0 + sim.combo * 0.45, 92.0) * pop), color)
+		_draw_combo()
+
+
+## The combo counter grows, brightens and shifts color as the chain climbs.
+func _draw_combo() -> void:
+	var pop := 1.0 + combo_pop * 0.28
+	var color := _combo_color(sim.combo)
+	var center := Vector2(BASE_W / 2.0, 1170.0)
+	var size := int(minf(58.0 + sim.combo * 0.35, 112.0) * pop)
+	soft_glow(center, Vector2(620.0, 280.0), Color(color, clampf(0.12 + sim.combo * 0.003, 0.0, 0.45)))
+	text_center(center, str(sim.combo), size, color)
+	text_center(center + Vector2(0.0, size * 0.62 + 8.0), t("hits_label"), 20, Color(color, 0.8), font_label)
 
 
 func _draw_upgrade_screen() -> void:
-	fill_screen(Color(0.04, 0.03, 0.1, 0.84))
+	fill_screen(Color(UI.INK, 0.8))
 	var clearing := sim.blocks.is_empty()
 	var heading := t("stage_clear") if clearing else t("pick_start")
-	text_outlined(Vector2(BASE_W / 2.0, 200.0), heading, fit_size(heading, 66, 640.0), COLOR_COIN)
+	var burst := 1.0 + maxf(0.25 - screen_age, 0.0) * 1.2
+	soft_glow(Vector2(BASE_W / 2.0, 190.0), Vector2(860.0, 320.0), Color(UI.GOLD, 0.2 + sin(time * 3.0) * 0.05))
+	text_center(Vector2(BASE_W / 2.0, 190.0), heading, int(fit_size(heading, 62, 640.0) * burst), UI.GOLD)
 	if clearing:
-		text_center(Vector2(BASE_W / 2.0, 272.0), t("pick_one"), 32, Color.WHITE)
-	var appear := clampf(screen_age / 0.25, 0.0, 1.0)
+		text_center(Vector2(BASE_W / 2.0, 262.0), t("pick_one"), 26, UI.MUTED, font_body)
 	var count := sim.choices.size()
 	for i in count:
+		# Cards rise in one after another.
+		var appear := clampf((screen_age - i * 0.06) / 0.22, 0.0, 1.0)
+		var ease_in := 1.0 - pow(1.0 - appear, 3.0)
 		var id := sim.choices[i]
 		var rect := card_rect(i, count)
-		rect.position.x += (1.0 - appear) * 500.0 * (i + 1)
+		rect.position.y += (1.0 - ease_in) * 70.0
 		var perk: Dictionary = Perks.PERKS[id]
-		var color: Color = Menus.RARITY_COLORS[int(perk["rarity"])]
+		var color: Color = UI.RARITY[int(perk["rarity"])]
 		var evolution := Perks.is_evolution(id)
-		draw_rect(rect, Color("4a2a10") if evolution else COLOR_BUTTON)
-		draw_rect(Rect2(rect.position, Vector2(12.0, rect.size.y)), color)
 		if evolution:
-			var glow := 0.55 + sin(time * 6.0) * 0.45
-			draw_rect(rect, Color(color, glow), false, 5.0)
+			var pulse := 0.5 + sin(time * 4.0) * 0.5
+			soft_glow(rect.get_center(), rect.size * 1.5, Color(color, (0.2 + pulse * 0.25) * ease_in))
+		panel(rect, Color(UI.PANEL_SOLID, 0.96 * ease_in), 30.0, Color(color, (0.9 if evolution else 0.45) * ease_in), 3 if evolution else 2)
+		panel(Rect2(rect.position + Vector2(rect.size.x * 0.35, -2.0), Vector2(rect.size.x * 0.3, 5.0)), Color(color, ease_in), 2.5)
 		var label := t("evolution") if evolution else t("rarity_%d" % int(perk["rarity"]))
-		text_left(rect.position + Vector2(30.0, 26.0), label, 20, color)
+		text_center(rect.position + Vector2(rect.size.x / 2.0, 30.0), label, 16, Color(color, ease_in), font_label)
 		var level: int = sim.levels[id]
 		if level > 0:
-			text_center(rect.position + Vector2(rect.size.x - 58.0, 26.0), t("level") % level, 22, COLOR_LABEL)
+			text_right(rect.position + Vector2(rect.size.x - 28.0, 30.0), t("level") % level, 19, Color(UI.MUTED, ease_in), font_body)
 		var name_text := t("perk_" + id)
-		var middle := rect.size.y * 0.33
-		text_center(rect.position + Vector2(rect.size.x / 2.0, middle), name_text, fit_size(name_text, 42, rect.size.x - 60.0), color)
+		text_center(rect.position + Vector2(rect.size.x / 2.0, rect.size.y * 0.38), name_text, fit_size(name_text, 42, rect.size.x - 60.0), Color(color, ease_in))
 		var lines := t("perk_%s_desc" % id).split("\n")
-		var line_y := rect.size.y * (0.62 if lines.size() > 1 else 0.7)
+		var line_y := rect.size.y * (0.64 if lines.size() > 1 else 0.7)
 		for l in lines.size():
-			text_center(rect.position + Vector2(rect.size.x / 2.0, line_y + l * 36.0), lines[l], fit_size(lines[l], 28, rect.size.x - 60.0), Color.WHITE)
+			text_center(rect.position + Vector2(rect.size.x / 2.0, line_y + l * 34.0), lines[l], fit_size(lines[l], 25, rect.size.x - 60.0), Color(UI.MUTED, ease_in), font_body)
 
 
 func card_rect(index: int, count: int) -> Rect2:
-	var top := 310.0
-	var area := 780.0
+	var top := 305.0
+	var area := 785.0
 	var gap := 16.0
-	var height := minf((area - gap * (count - 1)) / count, 230.0)
+	var height := minf((area - gap * (count - 1)) / count, 235.0)
 	return Rect2(70.0, top + index * (height + gap), 580.0, height)
 
 
 func _draw_end_screen(title: String, color: Color) -> void:
-	fill_screen(Color(0.04, 0.03, 0.1, 0.88))
-	var pop := 1.0 + maxf(0.3 - screen_age, 0.0) * 1.5
-	text_outlined(Vector2(BASE_W / 2.0, 230.0), title, int(fit_size(title, 78, 640.0) * pop), color)
+	fill_screen(Color(UI.INK, 0.86))
+	var pop := 1.0 + maxf(0.3 - screen_age, 0.0) * 1.2
+	soft_glow(Vector2(BASE_W / 2.0, 210.0), Vector2(860.0, 360.0), Color(color, 0.22))
+	text_center(Vector2(BASE_W / 2.0, 210.0), title, int(fit_size(title, 76, 640.0) * pop), color)
 	if run_new_record:
-		var wobble := 1.0 + sin(time * 8.0) * 0.06
-		text_outlined(Vector2(BASE_W / 2.0, 325.0), t("new_record"), int(44.0 * wobble), COLOR_COIN)
-	text_center(Vector2(BASE_W / 2.0, 410.0), t("total_damage"), 28, COLOR_LABEL)
-	text_center(Vector2(BASE_W / 2.0, 475.0), I18n.format_number(sim.total_damage), 72, Color.WHITE)
+		var chip := Rect2(BASE_W / 2.0 - 170.0, 275.0, 340.0, 56.0)
+		panel(chip, Color(UI.GOLD, 0.14 + sin(time * 5.0) * 0.05), 28.0, UI.GOLD, 2)
+		text_center(chip.get_center(), t("new_record"), fit_size(t("new_record"), 28, 310.0), UI.GOLD)
+	text_center(Vector2(BASE_W / 2.0, 380.0), t("total_damage"), 20, UI.MUTED, font_label)
+	text_center(Vector2(BASE_W / 2.0, 445.0), I18n.format_number(sim.total_damage), 84, UI.TEXT)
+	panel(Rect2(70.0, 510.0, 580.0, 320.0), UI.PANEL, 30.0, UI.LINE, 2)
 	var seconds := int(run_seconds)
 	var rows := [
 		["best_shot", I18n.format_number(sim.best_shot_damage)],
@@ -973,9 +1173,9 @@ func _draw_end_screen(title: String, color: Color) -> void:
 		["play_time", "%d:%02d" % [seconds / 60, seconds % 60]],
 	]
 	for i in rows.size():
-		row(Vector2(110.0, 570.0 + i * 54.0), 500.0, t(rows[i][0]), rows[i][1], 32, COLOR_COIN)
-	var alpha := 0.65 + sin(time * 6.0) * 0.35
-	text_outlined(Vector2(BASE_W / 2.0, 950.0), t("tap_retry"), 54, Color(1.0, 1.0, 1.0, alpha))
+		row(Vector2(105.0, 553.0 + i * 58.0), 510.0, t(rows[i][0]), rows[i][1], 29, UI.TEXT)
+	var alpha := 0.6 + sin(time * 4.5) * 0.4
+	text_center(Vector2(BASE_W / 2.0, 950.0), t("tap_retry"), 44, Color(UI.TEXT, alpha))
 
 
 ## Largest size up to `size` at which the text fits, so no language can overflow a box.
@@ -984,33 +1184,37 @@ func fit_size(text: String, size: int, max_width: float) -> int:
 	return size if width <= max_width else int(size * max_width / width)
 
 
-func text_center(center: Vector2, text: String, size: int, color: Color) -> void:
-	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
-	var baseline := center + Vector2(-width / 2.0, size * 0.35)
-	draw_string(font, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+func text_center(center: Vector2, text: String, size: int, color: Color, face: Font = null) -> void:
+	var used: Font = font if face == null else face
+	var width := used.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	canvas.draw_string(used, center + Vector2(-width / 2.0, size * 0.35), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
 
-func text_left(left: Vector2, text: String, size: int, color: Color) -> void:
-	draw_string(font, left + Vector2(0.0, size * 0.35), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+func text_left(left: Vector2, text: String, size: int, color: Color, face: Font = null) -> void:
+	canvas.draw_string(font if face == null else face, left + Vector2(0.0, size * 0.35), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
 
 
-func text_outlined(center: Vector2, text: String, size: int, color: Color) -> void:
-	var width := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
-	var baseline := center + Vector2(-width / 2.0, size * 0.35)
-	draw_string_outline(font, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, maxi(size / 6, 4), Color(0.0, 0.0, 0.0, color.a))
-	draw_string(font, baseline, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+func text_right(right: Vector2, text: String, size: int, color: Color, face: Font = null) -> void:
+	var used: Font = font if face == null else face
+	var width := used.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x
+	canvas.draw_string(used, right + Vector2(-width, size * 0.35), text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
+
+
+func text_shadowed(center: Vector2, text: String, size: int, color: Color) -> void:
+	text_center(center + Vector2(0.0, 5.0), text, size, Color(UI.INK, color.a * 0.6))
+	text_center(center, text, size, color)
 
 
 func _build_audio() -> void:
 	sounds = {
-		"hit": _tone(880.0, 0.06, 0.28, "square"),
-		"pop": _tone(520.0, 0.09, 0.4, "square", -3000.0),
+		"hit": _tone(880.0, 0.06, 0.28, "triangle"),
+		"pop": _tone(520.0, 0.09, 0.4, "triangle", -3000.0),
 		"boom": _noise(0.3, 0.75),
 		"coin": _tone(1320.0, 0.07, 0.22, "sine", 2500.0),
-		"fire": _tone(300.0, 0.1, 0.3, "square", 1800.0),
+		"fire": _tone(300.0, 0.1, 0.3, "triangle", 1800.0),
 		"pick": _tone(660.0, 0.12, 0.35, "sine", 1600.0),
-		"win": _tone(660.0, 0.35, 0.45, "square", 1200.0),
-		"lose": _tone(300.0, 0.5, 0.45, "square", -380.0),
+		"win": _tone(660.0, 0.35, 0.45, "triangle", 1200.0),
+		"lose": _tone(300.0, 0.5, 0.45, "triangle", -380.0),
 	}
 	for i in 14:
 		var player := AudioStreamPlayer.new()
@@ -1034,7 +1238,8 @@ func _tone(freq: float, duration: float, volume: float, wave: String, sweep := 0
 	for i in count:
 		var k := float(i) / SAMPLE_RATE
 		phase += (freq + sweep * k) / SAMPLE_RATE
-		var value := sin(phase * TAU) if wave == "sine" else (1.0 if fmod(phase, 1.0) < 0.5 else -1.0)
+		# A triangle wave is rounder than a square, and sits better with the softer look.
+		var value := sin(phase * TAU) if wave == "sine" else 1.0 - 4.0 * absf(fmod(phase, 1.0) - 0.5)
 		data.encode_s16(i * 2, int(value * volume * (1.0 - float(i) / count) * 32767.0))
 	return _wav(data)
 
