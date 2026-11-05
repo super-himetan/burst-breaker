@@ -44,6 +44,29 @@ const COUNT_UP_TICK := 0.07
 const OVERKILL_TEXT_GAP := 0.12
 const CARD_ICON_MAX := 120.0
 const CHIP_ICON_RADIUS := 12.0
+## The last target slows time, and destroying it nearly stops it.
+const TENSION_SLOW := 0.45
+const TENSION_SECONDS := 1.2
+const TENSION_ZOOM := 1.05
+const TENSION_BOSS_HP := 0.08
+const FINISH_SLOW := 0.12
+const FINISH_SECONDS := 0.6
+const FINISH_ZOOM := 1.16
+const FINISH_FX_RATE := 0.35
+const ZOOM_SPEED := 10.0
+const RANK_SECONDS := 1.4
+const RANK_POP_SECONDS := 0.16
+## Ranks below this are not worth interrupting the player's eye for.
+const RANK_SHOW_FROM := 2
+const RANK_COLORS: Array[Color] = [Color("8a8aa3"), Color("9db8ff"), Color("5ff0d0"), Color("6fdc6a"), Color("ffd84d"), Color("ff9a3d"), Color("ff5fa2")]
+const TRAIL_BASE := 34.0
+const TRAIL_PER_COMBO := 0.8
+const TRAIL_MAX_EXTRA := 110.0
+const TRAIL_COLOR_FULL_COMBO := 60.0
+const EVOLVE_SECONDS := 2.1
+const EVOLVE_IMPACT := 0.6
+const EVOLVE_SKIP_AFTER := 0.3
+const EVOLVE_FADE := 0.25
 
 var sim: GameSim
 var save: SaveData
@@ -133,6 +156,16 @@ var last_tick_sound := 0.0
 var last_overkill_text := 0.0
 var end_preview := {}
 var run_mastery_before := 0
+var finish_time := 0.0
+var tension_left := TENSION_SECONDS
+var zoom := 1.0
+var zoom_target := 1.0
+var zoom_focus := Vector2(BASE_W / 2.0, BASE_H / 2.0)
+var rank_time := 0.0
+var rank_shown := 0
+var evolve_cut := -1.0
+var evolve_id := ""
+var evolve_hit := false
 var verify_stats := {"max_balls": 0, "explosions": 0, "splits": 0}
 
 
@@ -296,7 +329,7 @@ func _set_paused(value: bool) -> void:
 
 
 func _can_pause() -> bool:
-	return screen == Menus.Screen.GAME and not paused and burst_windup < 0.0 and sim.state in [GameSim.State.AIM, GameSim.State.SHOOT]
+	return screen == Menus.Screen.GAME and not paused and burst_windup < 0.0 and evolve_cut < 0.0 and sim.state in [GameSim.State.AIM, GameSim.State.SHOOT]
 
 
 func is_run_over() -> bool:
@@ -315,6 +348,11 @@ func _start_run() -> void:
 	run_seconds = 0.0
 	run_new_record = false
 	end_age = 0.0
+	finish_time = 0.0
+	tension_left = TENSION_SECONDS
+	zoom = 1.0
+	rank_time = 0.0
+	evolve_cut = -1.0
 	run_mastery_before = save.mastery_level(save.ball_type)
 	paused = false
 	aiming = false
@@ -489,12 +527,19 @@ func _process(delta: float) -> void:
 	screen_age += delta
 	if screen == Menus.Screen.GAME and not paused:
 		_process_game(delta)
-	_update_fx(delta)
+	_update_fx(delta * (FINISH_FX_RATE if finish_time > 0.0 else 1.0))
+	finish_time = maxf(finish_time - delta, 0.0)
+	rank_time = maxf(rank_time - delta, 0.0)
 	var shake := trauma * trauma * 24.0 * _fx_scale()
 	var offset := Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
-	position = Vector2(0.0, y_offset) + offset
-	# The interface stays steady while the playfield shakes under it.
-	ui_layer.position = -offset
+	var wanted_zoom := 1.0 + (zoom_target - 1.0) * _fx_scale() if screen == Menus.Screen.GAME and not paused else 1.0
+	zoom = lerpf(zoom, wanted_zoom, minf(delta * ZOOM_SPEED, 1.0))
+	# Zoom toward the action, and counter both zoom and shake so the interface stays steady.
+	var pushed := zoom_focus * (1.0 - zoom)
+	position = Vector2(0.0, y_offset) + offset + pushed
+	scale = Vector2(zoom, zoom)
+	ui_layer.scale = Vector2.ONE / zoom
+	ui_layer.position = -(offset + pushed) / zoom
 	list_clip.position = Vector2(0.0, Menus.LIST_TOP) - offset
 	list_clip.visible = menus.is_list_screen(screen)
 	var target_heat := clampf(sim.combo / 90.0, 0.0, 1.0) if screen == Menus.Screen.GAME and sim.state == GameSim.State.SHOOT else 0.0
@@ -518,6 +563,9 @@ func _process_game(delta: float) -> void:
 		run_seconds += delta
 	elif boss_down <= 0.0:
 		_process_count_up(delta)
+	if evolve_cut >= 0.0:
+		_process_evolve_cut(delta)
+		return
 	if boss_intro >= 0.0:
 		_process_boss_intro(delta)
 		return
@@ -535,12 +583,91 @@ func _process_game(delta: float) -> void:
 	if hitstop > 0.0:
 		hitstop -= delta
 	else:
-		sim.step(delta)
+		sim.step(delta * _time_rate(delta))
 	verify_stats["max_balls"] = max(int(verify_stats["max_balls"]), sim.balls.size())
 	_consume_events()
 	_note_offered_perks()
 	if is_run_over():
 		_bank_run()
+
+
+## Slow motion around the end of a stage. Only the view slows, so the rules stay exact.
+func _time_rate(delta: float) -> float:
+	zoom_target = 1.0
+	if finish_time > 0.0:
+		zoom_target = FINISH_ZOOM
+		return FINISH_SLOW
+	if sim.state != GameSim.State.SHOOT or tension_left <= 0.0:
+		return 1.0
+	var target: Variant = _last_target()
+	if target == null:
+		return 1.0
+	tension_left -= delta
+	zoom_target = TENSION_ZOOM
+	zoom_focus = sim.block_rect(target).get_center()
+	return TENSION_SLOW
+
+
+## The one thing left standing between the player and the end of the stage, if there is one.
+func _last_target() -> Variant:
+	if sim.waves_left > 0:
+		return null
+	if sim.boss_block != null:
+		var boss: Dictionary = sim.boss_block
+		return boss if float(boss["hp"]) / float(boss["max_hp"]) <= TENSION_BOSS_HP else null
+	if sim.blocks.size() == 1:
+		return sim.blocks.values()[0]
+	return null
+
+
+func _begin_finish(pos: Vector2) -> void:
+	if finish_time > 0.0:
+		return
+	finish_time = FINISH_SECONDS
+	zoom_focus = pos
+	screen_flash = maxf(screen_flash, 0.8)
+	trauma = maxf(trauma, 0.8)
+	impact = maxf(impact, 0.02)
+	_play("blast", 1.2)
+	_spawn_particles(pos, UI.GOLD, 50, 800.0)
+	_spawn_particles(pos, Color.WHITE, 40, 1100.0)
+	rings.append({"pos": pos, "t": 0.0, "size": 260.0})
+	if save.vibration and OS.has_feature("mobile"):
+		Input.vibrate_handheld(60)
+
+
+func _begin_evolve_cut(id: String) -> void:
+	evolve_cut = 0.0
+	evolve_id = id
+	evolve_hit = false
+	aiming = false
+	_play("charge", 1.4)
+
+
+## Two parents fly in and collide. The game waits, since this is the build's big moment.
+func _process_evolve_cut(delta: float) -> void:
+	evolve_cut += delta
+	if not evolve_hit and evolve_cut >= EVOLVE_IMPACT:
+		evolve_hit = true
+		trauma = 1.0
+		screen_flash = 1.0
+		impact = 0.04
+		_play("blast", 1.0)
+		_play("win", 1.3)
+		if save.vibration and OS.has_feature("mobile"):
+			Input.vibrate_handheld(100)
+	if evolve_cut >= EVOLVE_SECONDS:
+		evolve_cut = -1.0
+
+
+func _show_rank(rank: int) -> void:
+	if rank < RANK_SHOW_FROM:
+		return
+	rank_shown = rank
+	rank_time = RANK_SECONDS
+	if rank >= GameSim.RANK_S:
+		_play("win", 1.2 + (rank - GameSim.RANK_S) * 0.2)
+		trauma = minf(trauma + 0.25, 1.0)
 
 
 ## The results count up with rising ticks, so a good run takes a moment to sink in.
@@ -551,6 +678,7 @@ func _process_count_up(delta: float) -> void:
 		return
 	if end_age >= COUNT_UP_SECONDS:
 		_play("win", 1.5)
+		trauma = maxf(trauma, 0.3)
 	elif time - last_tick_sound >= COUNT_UP_TICK:
 		last_tick_sound = time
 		_play("coin", 0.9 + end_age / COUNT_UP_SECONDS)
@@ -751,6 +879,10 @@ func _on_press(p: Vector2) -> void:
 		list_press = p
 		list_last = p
 		return
+	if evolve_cut >= 0.0:
+		if evolve_cut >= EVOLVE_SKIP_AFTER and not paused:
+			evolve_cut = -1.0
+		return
 	if screen == Menus.Screen.GAME and not paused and boss_intro >= BOSS_INTRO_SKIP_AFTER:
 		boss_intro = -1.0
 		return
@@ -866,7 +998,7 @@ func current_buttons() -> Array[Dictionary]:
 	if screen != Menus.Screen.GAME:
 		return menus.buttons(screen)
 	var list: Array[Dictionary] = []
-	if burst_windup >= 0.0 or (boss_intro >= 0.0 and not paused) or (boss_down > 0.0 and not paused):
+	if burst_windup >= 0.0 or evolve_cut >= 0.0 or (boss_intro >= 0.0 and not paused) or (boss_down > 0.0 and not paused):
 		return list
 	if paused:
 		list.append(_button("resume", Rect2(110.0, 430.0, 500.0, 120.0), t("resume"), "primary"))
@@ -934,10 +1066,16 @@ func _consume_events() -> void:
 				descend_anim = 1.0
 			"shot_end":
 				on_progress_changed(_live_stats())
+			"shot_rank":
+				_show_rank(int(e["rank"]))
+			"perk_taken":
+				if Perks.is_evolution(e["id"]):
+					_begin_evolve_cut(e["id"])
 			"burst_end":
 				if not sim.blocks.is_empty():
 					_show_banner(I18n.format_number(e["damage"]), 1.2)
 			"stage_start":
+				tension_left = TENSION_SECONDS
 				if e["boss"]:
 					_begin_boss_intro(e["boss_id"])
 				else:
@@ -1009,6 +1147,8 @@ func _on_kill(e: Dictionary) -> void:
 	var kind: String = e["kind"]
 	var color: Color = UI.BLOCKS.get(kind, UI.ramp(randf()))
 	var is_boss := kind == "boss"
+	if is_boss or (sim.blocks.is_empty() and sim.waves_left <= 0):
+		_begin_finish(e["pos"])
 	if int(e.get("overkill", 0)) > 0:
 		_on_overkill(e)
 	_spawn_particles(e["pos"], color, 70 if is_boss else 16, 900.0 if is_boss else 420.0)
@@ -1232,8 +1372,12 @@ func _draw_glow() -> void:
 	var radius := sim.ball_radius
 	for ball in sim.balls:
 		var color: Color = ball_color.lerp(UI.STAR, 0.7) if ball.temp else ball_color
-		var tail: Vector2 = ball.pos - ball.vel.normalized() * (34.0 + radius * 2.0)
-		glow_layer.draw_line(tail, ball.pos, Color(color, 0.3), radius * 1.3)
+		# The tail grows and takes on the combo's colour as a shot heats up.
+		var length := TRAIL_BASE + radius * 2.0 + minf(sim.combo * TRAIL_PER_COMBO, TRAIL_MAX_EXTRA)
+		var trail_color := color.lerp(_combo_color(sim.combo), minf(sim.combo / TRAIL_COLOR_FULL_COMBO, 0.85))
+		var back: Vector2 = -ball.vel.normalized() * length
+		glow_layer.draw_line(ball.pos + back, ball.pos + back * 0.45, Color(trail_color, 0.14), radius * 0.9)
+		glow_layer.draw_line(ball.pos + back * 0.45, ball.pos, Color(trail_color, 0.34), radius * 1.4)
 		_glow_sprite(ball.pos, radius * 5.0, Color(color, 0.42))
 	for block in sim.unique_blocks():
 		if block["kind"] == "bomb" or block["kind"] == "treasure":
@@ -1375,6 +1519,7 @@ func _draw_game_ui() -> void:
 				_draw_end_screen(t("you_win"), UI.GOLD)
 			GameSim.State.LOST:
 				_draw_end_screen(t("game_over"), UI.ACCENT)
+	_draw_rank()
 	_draw_boss_speech()
 	if banner_time > 0.0 and (sim.state != GameSim.State.UPGRADE or boss_down > 0.0) and not paused:
 		var pop := 1.0 + clampf(banner_time - 0.75, 0.0, 0.25) * 1.6
@@ -1386,10 +1531,56 @@ func _draw_game_ui() -> void:
 		_draw_burst_cut_in()
 	if boss_intro >= 0.0:
 		_draw_boss_intro()
+	if evolve_cut >= 0.0:
+		_draw_evolve_cut()
 	if paused:
 		fill_screen(Color(UI.INK, 0.82))
 		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
 		_draw_build(935.0, 6)
+
+
+## Slams in beside the field, clear of the heading and the cards when a stage just ended.
+func _draw_rank() -> void:
+	if rank_time <= 0.0 or is_run_over() or paused:
+		return
+	var age := RANK_SECONDS - rank_time
+	var pop := 1.0 + maxf(RANK_POP_SECONDS - age, 0.0) / RANK_POP_SECONDS * 0.9
+	var alpha := minf(rank_time * 4.0, 1.0)
+	var color: Color = RANK_COLORS[rank_shown]
+	var center := Vector2(610.0, 262.0)
+	soft_glow(center, Vector2(240.0, 200.0), Color(color, 0.4 * alpha))
+	text_shadowed(center, GameSim.RANKS[rank_shown], int(fit_size(GameSim.RANKS[rank_shown], 66, 170.0) * pop), Color(color, alpha))
+
+
+func _draw_evolve_cut() -> void:
+	var center := Vector2(BASE_W / 2.0, 500.0)
+	var fade := clampf((EVOLVE_SECONDS - evolve_cut) / EVOLVE_FADE, 0.0, 1.0)
+	fill_screen(Color(UI.INK, 0.9 * minf(evolve_cut / 0.12, 1.0) * fade))
+	var parents: Array = Perks.PERKS[evolve_id]["requires"]
+	if evolve_cut < EVOLVE_IMPACT:
+		var k := evolve_cut / EVOLVE_IMPACT
+		var gap := (1.0 - k * k * k) * 300.0
+		PerkArt.draw_single(canvas, parents[0], center - Vector2(gap, 0.0), 78.0)
+		PerkArt.draw_single(canvas, parents[1], center + Vector2(gap, 0.0), 78.0)
+		soft_glow(center, Vector2.ONE * (200.0 + k * k * 500.0), Color(UI.GOLD, k * 0.6))
+		return
+	var since := evolve_cut - EVOLVE_IMPACT
+	var pop := 1.0 + maxf(0.18 - since, 0.0) * 2.2
+	var ray_fade := clampf(1.0 - since / 0.9, 0.0, 1.0) * fade
+	for i in 12:
+		var angle := i * TAU / 12.0 + time * 0.6
+		var a := center + Vector2.from_angle(angle - 0.06) * 900.0
+		var b := center + Vector2.from_angle(angle + 0.06) * 900.0
+		canvas.draw_colored_polygon(PackedVector2Array([center, a, b]), Color(UI.GOLD, 0.28 * ray_fade))
+	canvas.draw_arc(center, since * 1100.0, 0.0, TAU, 72, Color(1.0, 1.0, 1.0, ray_fade), 10.0, true)
+	soft_glow(center, Vector2(900.0, 900.0), Color(UI.GOLD, 0.5 * fade))
+	PerkArt.draw(canvas, evolve_id, center, 130.0 * pop, fade)
+	text_center(center + Vector2(0.0, -210.0), t("evolution"), 34, Color(UI.GOLD, fade), font_label)
+	var title := t("perk_" + evolve_id)
+	text_shadowed(center + Vector2(0.0, 220.0), title, int(fit_size(title, 72, 640.0) * pop), Color(UI.GOLD, fade))
+	var lines := t("perk_%s_desc" % evolve_id).split("\n")
+	for i in lines.size():
+		text_center(center + Vector2(0.0, 300.0 + i * 40.0), lines[i], fit_size(lines[i], 30, 620.0), Color(UI.TEXT, fade), font_body)
 
 
 ## A comic-style bubble under the boss, kept on screen wherever the boss has moved to.
@@ -1593,8 +1784,9 @@ func _ball_color() -> Color:
 func _draw_balls() -> void:
 	var base := _ball_color()
 	var radius := sim.ball_radius
+	var heated := base.lerp(_combo_color(sim.combo), minf(sim.combo / TRAIL_COLOR_FULL_COMBO, 0.5))
 	for ball in sim.balls:
-		var color: Color = base.lerp(UI.STAR, 0.5) if ball.temp else base
+		var color: Color = heated.lerp(UI.STAR, 0.5) if ball.temp else heated
 		canvas.draw_circle(ball.pos, radius, color)
 
 
@@ -1818,6 +2010,7 @@ func _draw_end_screen(title: String, color: Color) -> void:
 		var chip := Rect2(BASE_W / 2.0 - 150.0, 198.0, 300.0, 48.0)
 		panel(chip, Color(UI.GOLD, 0.14 + sin(time * 5.0) * 0.05), 24.0, UI.GOLD, 2)
 		text_center(chip.get_center(), t("new_record"), fit_size(t("new_record"), 25, 270.0), UI.GOLD)
+	_draw_run_rank(Vector2(615.0, 310.0))
 	text_center(Vector2(BASE_W / 2.0, 272.0), t("total_damage"), 20, UI.MUTED, font_label)
 	text_center(Vector2(BASE_W / 2.0, 326.0), I18n.format_number(_counted(sim.total_damage)), 72, UI.TEXT)
 	panel(Rect2(70.0, 376.0, 580.0, 240.0), UI.PANEL, 28.0, UI.LINE, 2)
@@ -1839,6 +2032,19 @@ func _draw_end_screen(title: String, color: Color) -> void:
 	if after > now:
 		var gain := t("power_gain") % ceili(100.0 * float(after - now) / float(now))
 		text_center(Vector2(BASE_W / 2.0, 908.0), gain, fit_size(gain, 24, 600.0), UI.GOLD)
+
+
+func _draw_run_rank(center: Vector2) -> void:
+	var rank := sim.run_rank()
+	var color: Color = RANK_COLORS[rank]
+	# It lands just as the numbers finish counting, as the last beat of the results.
+	var since := end_age - COUNT_UP_SECONDS
+	if since < 0.0:
+		return
+	var pop := 1.0 + maxf(0.16 - since, 0.0) * 5.0
+	soft_glow(center, Vector2(220.0, 180.0), Color(color, 0.4))
+	text_center(center + Vector2(0.0, -50.0), t("run_rank"), 18, UI.MUTED, font_label)
+	text_shadowed(center, GameSim.RANKS[rank], int(fit_size(GameSim.RANKS[rank], 64, 160.0) * pop), color)
 
 
 ## Says what ended the run, so the next one has something to try differently.

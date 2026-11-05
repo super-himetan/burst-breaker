@@ -23,6 +23,7 @@ const TRACKS := {
 	"shop_levels": [5, 15, 30, 60, 90],
 	"mastery_levels": [3, 10, 25, 50, 80],
 	"overkills": [100, 1000, 10000, 50000, 200000],
+	"style_s": [1, 10, 50, 250, 1000],
 	"clears_normal": [1],
 	"clears_iron": [1],
 	"clears_fire": [1],

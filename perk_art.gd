@@ -96,14 +96,14 @@ static func draw(canvas: CanvasItem, id: String, center: Vector2, radius: float,
 	if Perks.is_evolution(id):
 		var parents: Array = Perks.PERKS[id]["requires"]
 		var offset := Vector2(radius, radius) * EVOLUTION_OFFSET
-		_draw_single(canvas, parents[0], center - offset, radius * EVOLUTION_SCALE, alpha)
-		_draw_single(canvas, parents[1], center + offset, radius * EVOLUTION_SCALE, alpha)
+		draw_single(canvas, parents[0], center - offset, radius * EVOLUTION_SCALE, alpha)
+		draw_single(canvas, parents[1], center + offset, radius * EVOLUTION_SCALE, alpha)
 		_draw_shape(canvas, GLYPHS["star"][0], center + Vector2(radius, -radius) * EVOLUTION_OFFSET, radius * 0.42, Color(SPARK_COLOR, alpha))
 		return
-	_draw_single(canvas, id, center, radius, alpha)
+	draw_single(canvas, id, center, radius, alpha)
 
 
-static func _draw_single(canvas: CanvasItem, id: String, center: Vector2, radius: float, alpha: float) -> void:
+static func draw_single(canvas: CanvasItem, id: String, center: Vector2, radius: float, alpha := 1.0) -> void:
 	var icon: Array = ICONS[id]
 	var color := Color(color_of(id), alpha)
 	for shape: Array in GLYPHS[icon[0]]:

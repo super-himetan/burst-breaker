@@ -68,6 +68,7 @@ func _init() -> void:
 	_test_overkill()
 	_test_old_sound_switches_carry_over()
 	_test_perk_icons()
+	_test_style_ranks()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -1392,6 +1393,42 @@ func _test_perk_icons() -> void:
 	for tag in Perks.TAGS:
 		ok = ok and PerkArt.TAG_COLORS.has(tag)
 	_check(ok, "every build has an icon colour")
+
+
+func _test_style_ranks() -> void:
+	_check(GameSim.RANKS.size() == GameSim.RANK_THRESHOLDS.size() and GameSim.RANKS.size() == GameSim.RUN_RANK_THRESHOLDS.size(), "every rank has a threshold")
+	var ordered := true
+	for i in range(1, GameSim.RANKS.size()):
+		ordered = ordered and GameSim.RANK_THRESHOLDS[i] > GameSim.RANK_THRESHOLDS[i - 1] and GameSim.RUN_RANK_THRESHOLDS[i] > GameSim.RUN_RANK_THRESHOLDS[i - 1]
+	_check(ordered, "better ranks need higher scores")
+	_check(GameSim.rank_for(-1.0, GameSim.RANK_THRESHOLDS) == 0 and GameSim.rank_for(99999.0, GameSim.RANK_THRESHOLDS) == GameSim.RANKS.size() - 1, "any score maps to a rank")
+	var sim := _sim()
+	sim.fire(Vector2.UP)
+	sim._shot_start_blocks = 10
+	sim._shot_balls = 10
+	sim._shot_start_kills = 0
+	sim.combo = 10
+	sim.counters["kills"] = 1
+	sim._rate_shot()
+	var weak := sim.last_shot_score
+	sim.counters["kills"] = 10
+	sim.combo = 80
+	sim._rate_shot()
+	_check(sim.last_shot_score > weak and sim.last_shot_rank > GameSim.rank_for(weak, GameSim.RANK_THRESHOLDS), "clearing more of the field earns a better rank")
+	var boss_sim := _sim()
+	boss_sim.stage = 3
+	boss_sim.boss_force = "purun"
+	boss_sim._start_stage()
+	boss_sim.fire(Vector2.UP)
+	var boss: Dictionary = boss_sim.boss_block
+	boss["hp"] = int(boss["max_hp"]) / 2
+	boss_sim.combo = 0
+	boss_sim._rate_shot()
+	_check(boss_sim.last_shot_score >= GameSim.STYLE_BOSS_WEIGHT * 0.49, "a big hit on a boss counts toward style")
+	var lost := _sim()
+	var run_score := lost.run_rank()
+	lost.state = GameSim.State.WON
+	_check(lost.run_rank() == run_score + 1, "finishing the run lifts its grade")
 
 
 func _test_next_unlock() -> void:

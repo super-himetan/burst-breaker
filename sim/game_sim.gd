@@ -40,6 +40,15 @@ const BURST_RAIN_BALLS := 60
 ## A hit this many times a block's max HP crushes it, and each further step pays more coins.
 const OVERKILL_RATIO := 4.0
 const OVERKILL_MAX_STEPS := 4
+## Style ranks, worst to best. A score at or above a threshold earns that rank.
+const RANKS: Array[String] = ["D", "C", "B", "A", "S", "SS", "SSS"]
+## Set from measured play: about one shot in ten reaches S, and about one in a hundred SSS.
+const RANK_THRESHOLDS: Array[float] = [0.0, 1.0, 2.5, 4.5, 7.0, 11.0, 17.0]
+const RUN_RANK_THRESHOLDS: Array[float] = [0.0, 2.0, 2.7, 3.5, 5.0, 8.0, 14.0]
+const RANK_S := 4
+## How much clearing the whole field, or a boss's whole health bar, adds to a shot's score.
+const STYLE_FIELD_WEIGHT := 5.0
+const STYLE_BOSS_WEIGHT := 8.0
 
 const STAGES := [
 	{"rows": 3, "waves": 1, "hp_min": 1, "hp_max": 3, "density": 0.65, "specials": {"bomb": 0.1}},
@@ -123,6 +132,8 @@ var shots := 0
 var sim_time := 0.0
 var counters := {}
 var burst_charge := 0.0
+var last_shot_score := 0.0
+var last_shot_rank := 0
 
 var _rng := RandomNumberGenerator.new()
 var _launch_dir := Vector2.UP
@@ -145,6 +156,13 @@ var _burst_shot_gain := 0.0
 var _boss_met: Array = []
 var boss_force := ""
 var boss_force_own_pool := false
+var _shot_start_blocks := 1
+var _shot_start_kills := 0
+var _shot_balls := 1
+var _shot_start_boss_hp := 0
+var _shot_boss_max_hp := 0
+var _style_total := 0.0
+var _style_shots := 0
 
 
 ## config: ball_type, tier, shop ({id: level}), stars, unlocked_perks (null = all),
@@ -180,7 +198,11 @@ func new_run(seed_value: int, config := {}) -> void:
 	shots = 0
 	sim_time = 0.0
 	bonus_balls = 0
-	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0, "overkills": 0}
+	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0, "overkills": 0, "style_s": 0}
+	last_shot_score = 0.0
+	last_shot_rank = 0
+	_style_total = 0.0
+	_style_shots = 0
 	_burst_shot = false
 	_burst_shot_gain = 0.0
 	_accumulator = 0.0
@@ -258,6 +280,11 @@ func fire(dir: Vector2) -> bool:
 	combo = 0
 	shot_damage = 0
 	shots += 1
+	_shot_start_blocks = maxi(unique_blocks().size(), 1)
+	_shot_start_kills = int(counters["kills"])
+	_shot_balls = shot_ball_count()
+	_shot_start_boss_hp = 0 if boss_block == null else int((boss_block as Dictionary)["hp"])
+	_shot_boss_max_hp = 0 if boss_block == null else int((boss_block as Dictionary)["max_hp"])
 	_emit({"type": "fire"})
 	return true
 
@@ -1069,6 +1096,7 @@ func _end_shot() -> void:
 		_end_burst()
 		return
 	_apply_end_of_shot()
+	_rate_shot()
 	if _is_stage_finished():
 		_clear_stage()
 		return
@@ -1083,6 +1111,43 @@ func _end_shot() -> void:
 	if _check_death():
 		return
 	state = State.AIM
+
+
+## Rewards how much one shot achieved, measured so bigger numbers alone do not inflate it:
+## share of the field destroyed, share of a boss's health taken, and hits per ball.
+func _rate_shot() -> void:
+	var kills := int(counters["kills"]) - _shot_start_kills
+	var score := STYLE_FIELD_WEIGHT * float(kills) / _shot_start_blocks + float(combo) / _shot_balls
+	if _shot_start_boss_hp > 0:
+		var boss_hp := 0 if boss_block == null else maxi(int((boss_block as Dictionary)["hp"]), 0)
+		var max_hp: float = _boss_max_hp_at_shot()
+		score += STYLE_BOSS_WEIGHT * float(maxi(_shot_start_boss_hp - boss_hp, 0)) / max_hp
+	last_shot_score = score
+	last_shot_rank = rank_for(score, RANK_THRESHOLDS)
+	_style_total += score
+	_style_shots += 1
+	if last_shot_rank >= RANK_S:
+		counters["style_s"] += 1
+	_emit({"type": "shot_rank", "rank": last_shot_rank})
+
+
+func _boss_max_hp_at_shot() -> float:
+	return maxf(float(_shot_boss_max_hp), 1.0)
+
+
+static func rank_for(score: float, thresholds: Array[float]) -> int:
+	var rank := 0
+	for i in thresholds.size():
+		if score >= thresholds[i]:
+			rank = i
+	return rank
+
+
+## The run's overall grade: the average shot, with a step up for finishing the run.
+func run_rank() -> int:
+	var average := _style_total / maxi(_style_shots, 1)
+	var rank := rank_for(average, RUN_RANK_THRESHOLDS)
+	return mini(rank + (1 if state == State.WON else 0), RANKS.size() - 1)
 
 
 func _end_burst() -> void:

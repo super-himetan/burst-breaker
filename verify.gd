@@ -35,6 +35,8 @@ func run() -> void:
 	await _shot("04_game_start_ja")
 	await _verify_aim_controls()
 	await _verify_pause()
+	await _verify_finish()
+	_verify_interruption()
 	await _verify_play()
 	await _verify_end()
 	await _verify_specials()
@@ -151,13 +153,24 @@ func _verify_play() -> void:
 				_check("upgrade_card_tap", host.sim.picks_pending < before or host.sim.stage > stage_before)
 	if host.sim.counters["kills"] <= 0:
 		_check("blocks_were_broken", false)
-	_verify_interruption()
+	_check("shots_are_ranked", host.sim._style_shots > 0)
+
+
+## Slow motion must never leave the game stuck, and only the real clock may end it.
+func _verify_finish() -> void:
+	host._show_rank(GameSim.RANK_S)
+	host._begin_finish(Vector2(360.0, 400.0))
+	_check("finish_slows_time", host._time_rate(0.016) < 0.5)
+	await _wait(0.2)
+	await _shot("08a_finish_and_rank_ja")
+	await _wait(1.0)
+	_check("finish_returns_to_full_speed", host.finish_time <= 0.0)
 
 
 ## The OS can close a backgrounded app without warning, so its coins must already be on disk.
 func _verify_interruption() -> void:
-	if host.is_run_over():
-		return
+	# A run counts once anything has been hit, and this check must not depend on the aim.
+	host.sim.total_damage = maxi(host.sim.total_damage, 1)
 	host.sim.coins += 7
 	host._notification(Node.NOTIFICATION_APPLICATION_PAUSED)
 	var reloaded := SaveData.new(host.save.path)
@@ -477,8 +490,18 @@ func _verify_english() -> void:
 	await _wait(0.5)
 	await _shot("39_upgrade_en")
 	_key(KEY_1)
-	await _wait(0.05)
+	await _wait(0.2)
 	_check("number_key_picks_a_card", sim.levels["e_inferno"] == 1)
+	_check("evolution_plays_its_moment", host.evolve_cut >= 0.0)
+	_check("no_buttons_during_evolution", host.current_buttons().is_empty())
+	await _wait(0.1)
+	await _shot("39a_evolve_gather_en")
+	await _wait_until(func() -> bool: return host.evolve_cut >= host.EVOLVE_IMPACT + 0.5, 3000)
+	await _shot("39b_evolve_en")
+	_touch_tap_skip()
+	await _wait_until(func() -> bool: return host.evolve_cut < 0.0, 3000)
+	_check("evolution_can_be_skipped", host.evolve_cut < 0.0)
+	await _wait(0.1)
 	sim.total_damage = 1
 	sim.state = GameSim.State.LOST
 	await _wait(0.5)
@@ -563,6 +586,11 @@ func _shot(name_: String) -> void:
 
 func _to_window(world: Vector2) -> Vector2:
 	return host.get_viewport().get_final_transform() * (world + Vector2(0.0, host.y_offset))
+
+
+func _touch_tap_skip() -> void:
+	_touch(Vector2(360.0, 650.0), true)
+	_touch(Vector2(360.0, 650.0), false)
 
 
 func _key(keycode: int) -> void:
