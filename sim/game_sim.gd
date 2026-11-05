@@ -4,6 +4,7 @@ extends RefCounted
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
 const Shop := preload("res://data/shop.gd")
+const StarTree := preload("res://data/star_tree.gd")
 const Tiers := preload("res://data/tiers.gd")
 const Bosses := preload("res://data/bosses.gd")
 
@@ -28,13 +29,17 @@ const CHAIN_DELAY := 0.07
 const CRIT_BASE_MULT := 2.5
 const NO_CELL := Vector2i(-9999, -9999)
 const STAR_DAMAGE := 0.25
-const STAR_COINS := 0.25
+## Coins buy stars and stars earn coins, so this share sets how fast the whole economy snowballs.
+const STAR_COINS := 0.1
 const BURST_PER_HIT := 1.0 / 260.0
 const BURST_SHOT_CAP := 0.3
 ## Starting part-way means even a short run gets to see the move.
 const BURST_START := 0.3
 const BURST_WAVE_SPEED := 1500.0
 const BURST_RAIN_BALLS := 60
+## A hit this many times a block's max HP crushes it, and each further step pays more coins.
+const OVERKILL_RATIO := 4.0
+const OVERKILL_MAX_STEPS := 4
 
 const STAGES := [
 	{"rows": 3, "waves": 1, "hp_min": 1, "hp_max": 3, "density": 0.65, "specials": {"bomb": 0.1}},
@@ -175,8 +180,7 @@ func new_run(seed_value: int, config := {}) -> void:
 	shots = 0
 	sim_time = 0.0
 	bonus_balls = 0
-	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0}
-	burst_charge = BURST_START
+	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0, "overkills": 0}
 	_burst_shot = false
 	_burst_shot_gain = 0.0
 	_accumulator = 0.0
@@ -186,6 +190,7 @@ func new_run(seed_value: int, config := {}) -> void:
 	_offered_evolutions = {}
 	death_row = DEATH_ROW - 1 if Tiers.has_rule(tier, "shorter_field") else DEATH_ROW
 	_recompute_stats()
+	burst_charge = minf(BURST_START + stat("burst_start"), 1.0)
 	rerolls = int(stat("rerolls"))
 	if Tiers.has_rule(tier, "no_free_reroll"):
 		rerolls = 0
@@ -443,10 +448,17 @@ func _build_base_stats(config: Dictionary) -> Dictionary:
 	var ball: Dictionary = Balls.BALLS.get(ball_type, Balls.BALLS["normal"])
 	_add_stats(base, ball["add"], 1)
 	base["ball_count"] = float(ball["count"])
+	var mastery: int = config.get("mastery", 0)
+	_add_stats(base, ball["mastery"], mastery)
+	base["ball_count"] = float(base["ball_count"]) + mastery / Balls.MASTERY_BALL_EVERY
 	var shop: Dictionary = config.get("shop", {})
 	for id: String in shop:
 		if Shop.ITEMS.has(id):
-			_add_stats(base, Shop.ITEMS[id]["add"], int(shop[id]))
+			Shop.apply(base, id, int(shop[id]))
+	var star_nodes: Dictionary = config.get("star_nodes", {})
+	for id: String in star_nodes:
+		if StarTree.NODES.has(id):
+			_add_stats(base, StarTree.NODES[id]["add"], int(star_nodes[id]))
 	base["damage_pct"] = float(base.get("damage_pct", 0.0))
 	base["star_mult"] = 1.0 + STAR_DAMAGE * int(config.get("stars", 0))
 	if Tiers.has_rule(tier, "fewer_balls"):
@@ -805,7 +817,7 @@ func _hit_block_with_ball(cell: Vector2i, block: Dictionary, ball: Ball) -> void
 
 ## Multipliers shared by every damage source.
 func _scale_damage(damage: float, block: Dictionary) -> float:
-	var scaled := damage * (1.0 + stat("damage_pct")) * float(stats.get("star_mult", 1.0))
+	var scaled := damage * (1.0 + stat("damage_pct")) * float(stats.get("star_mult", 1.0)) * float(stats.get("damage_mult", 1.0))
 	scaled *= 1.0 + stat("momentum") * _stages_cleared
 	if stat("finisher") > 0.0 and float(block["hp"]) / float(block["max_hp"]) < 0.3:
 		scaled *= 1.0 + stat("finisher")
@@ -886,20 +898,27 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		"dot": flags.get("dot", false),
 	})
 	if int(block["hp"]) <= 0:
-		_kill_block(cell, block, flags)
+		_kill_block(cell, block, flags, _overkill_steps(amount, block, flags))
 	elif block["kind"] == "boss":
 		_on_boss_hurt(block)
 
 
 func _charge_burst() -> void:
-	var gain := minf(BURST_PER_HIT, BURST_SHOT_CAP - _burst_shot_gain)
+	var gain := minf(BURST_PER_HIT * (1.0 + stat("burst_gain")), BURST_SHOT_CAP - _burst_shot_gain)
 	if gain <= 0.0:
 		return
 	_burst_shot_gain += gain
 	burst_charge = minf(burst_charge + gain, 1.0)
 
 
-func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
+## Direct hits only, and never a boss: this rewards outgrowing the small blocks.
+func _overkill_steps(amount: int, block: Dictionary, flags: Dictionary) -> int:
+	if block["kind"] == "boss" or flags.get("dot", false):
+		return 0
+	return mini(int(float(amount) / float(block["max_hp"]) / OVERKILL_RATIO), OVERKILL_MAX_STEPS)
+
+
+func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary, overkill := 0) -> void:
 	var kind: String = block["kind"]
 	_erase_block(block)
 	counters["kills"] += 1
@@ -912,9 +931,12 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
 		counters["bosses"] += 1
 		counters["boss_" + String(block["boss_id"])] = int(counters.get("boss_" + String(block["boss_id"]), 0)) + 1
 		boss_block = null
+	if overkill > 0:
+		gained *= 1.0 + overkill
+		counters["overkills"] += 1
 	var coin_amount := _grant_coins(gained)
 	var center := block_rect(block).get_center()
-	_emit({"type": "kill", "pos": center, "coins": coin_amount, "kind": kind, "bomb": kind == "bomb", "boss_id": block.get("boss_id", "")})
+	_emit({"type": "kill", "pos": center, "coins": coin_amount, "kind": kind, "bomb": kind == "bomb", "boss_id": block.get("boss_id", ""), "overkill": overkill})
 	if kind == "extra_ball":
 		bonus_balls += 1
 		_emit({"type": "extra_ball", "pos": center})

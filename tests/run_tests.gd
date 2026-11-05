@@ -11,6 +11,7 @@ const Shop := preload("res://data/shop.gd")
 const Tiers := preload("res://data/tiers.gd")
 const Achievements := preload("res://data/achievements.gd")
 const Music := preload("res://music.gd")
+const StarTree := preload("res://data/star_tree.gd")
 const DT := 1.0 / 60.0
 
 var failures := 0
@@ -59,6 +60,11 @@ func _init() -> void:
 	_test_burn_is_gentler_on_bosses()
 	_test_only_moved_blocks_slide()
 	_test_music_loop()
+	_test_shop_milestones()
+	_test_buy_all_order()
+	_test_star_tree()
+	_test_ball_mastery()
+	_test_overkill()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -1223,6 +1229,130 @@ func _test_music_loop() -> void:
 		loudest = maxi(loudest, absi(pcm.decode_s16(i * 2)))
 	_check(loudest > 20000 and loudest < 32000, "the music is audible and does not clip")
 	_check(absi(pcm.decode_s16(0) - pcm.decode_s16((samples - 1) * 2)) < 6000, "the music has no jump where it loops")
+
+
+func _test_shop_milestones() -> void:
+	var before := {}
+	Shop.apply(before, "damage", 9)
+	var after := {}
+	Shop.apply(after, "damage", 10)
+	_check(not before.has("damage_mult") or is_equal_approx(float(before["damage_mult"]), 1.0), "no milestone before its level")
+	_check(is_equal_approx(float(after["damage_mult"]), 1.5), "attack level 10 multiplies damage")
+	_check(Shop.is_milestone("damage", 10) and not Shop.is_milestone("damage", 11), "milestones land on their level")
+	_check(Shop.next_milestone("damage", 11) == 20 and Shop.next_milestone("damage", 40) == 0, "the next milestone is known, and ends at the cap")
+	var plain := _sim(1, {"shop": {"damage": 9}})
+	var boosted := _sim(1, {"shop": {"damage": 10}})
+	var a := _single_block(plain, Vector2i(3, 2), 1000)
+	var b := _single_block(boosted, Vector2i(3, 2), 1000)
+	_check(boosted._scale_damage(10.0, b) > plain._scale_damage(10.0, a) * 1.5, "a milestone is a real jump in the sim")
+	var every := true
+	for id in Shop.ids():
+		var item: Dictionary = Shop.ITEMS[id]
+		if item.has("every"):
+			every = every and I18n.TEXT["ja"].has("shop_%s_bonus" % id) and I18n.TEXT["en"].has("shop_%s_bonus" % id)
+	_check(every, "every milestone can name its bonus")
+
+
+func _test_buy_all_order() -> void:
+	var data := SaveData.new(_temp_save_path("buy_all"))
+	data.coins = 10000
+	var preview := data.preview_buy_all()
+	var start_power := data.power_rating()
+	var bought := 0
+	var id := data.cheapest_item()
+	while id != "":
+		data.buy(id)
+		bought += 1
+		id = data.cheapest_item()
+	_check(bought == preview["levels"] and data.power_rating() == preview["power"], "the preview matches what buying all does")
+	_check(data.power_rating() > start_power, "buying raises power")
+	_check(not data.is_shop_item_open("infinity") and not data.shop_ids().has("infinity"), "the endless item stays hidden at first")
+	for item: String in Shop.ITEMS:
+		if not Shop.ITEMS[item].get("after_all", false):
+			data.shop[item] = int(Shop.ITEMS[item]["max"])
+	data.coins = 5000
+	_check(data.shop_ids().has("infinity") and data.cheapest_item() == "infinity", "the endless item opens once the shop is maxed")
+	_check(data.buy("infinity") and data.shop_level("infinity") == 1, "the endless item can be bought")
+	var maxed_price := Shop.cost("infinity", int(Shop.ITEMS["infinity"]["max"]) - 1)
+	_check(maxed_price > 0, "the endless item's price stays in range up to its cap")
+
+
+func _test_star_tree() -> void:
+	var path := _temp_save_path("stars")
+	var data := SaveData.new(path)
+	data.stars = 4
+	_check(not data.raise_star("s_crit"), "a node stays shut until its parent has a level")
+	_check(data.raise_star("s_damage") and data.star_points_left() == 3, "raising a node spends stars")
+	_check(data.raise_star("s_crit") and data.star_points_left() == 1, "the child opens after the parent")
+	_check(not data.raise_star("s_choice"), "a node cannot be raised without enough stars")
+	data.save_file()
+	var loaded := SaveData.new(path)
+	loaded.load_file()
+	_check(loaded.star_level("s_crit") == 1 and loaded.star_points_left() == 1, "the tree survives a reload")
+	var plain := _sim()
+	var starred := _sim(1, loaded.run_config(false))
+	var a := _single_block(plain, Vector2i(3, 2), 1000)
+	var b := _single_block(starred, Vector2i(3, 2), 1000)
+	_check(starred._scale_damage(10.0, b) > plain._scale_damage(10.0, a), "the tree changes the run")
+	loaded.reset_stars()
+	_check(loaded.star_points_left() == 4 and loaded.stars == 4, "resetting refunds every star")
+	var burst := _sim(1, {"star_nodes": {"s_burst_start": 2}})
+	_check(is_equal_approx(burst.burst_charge, GameSim.BURST_START + 0.2), "the tree can start the gauge higher")
+	var kept := SaveData.new(_temp_save_path("stars_keep"))
+	kept.stars = 3
+	kept.raise_star("s_coins")
+	kept.star_nodes["s_keep"] = 2
+	kept.wins = 1
+	kept.coins = 1000
+	kept.coins_this_life = 60000
+	kept.prestige()
+	_check(kept.coins == 200, "savings keep part of the coins through prestige")
+	_check(kept.star_level("s_keep") == 2, "the tree survives prestige")
+	var cost_total := 0
+	for id in StarTree.ids():
+		cost_total += int(StarTree.NODES[id]["cost"]) * int(StarTree.NODES[id]["max"])
+		for part in ["", "_desc"]:
+			_check(I18n.TEXT["ja"].has("star_%s%s" % [id, part]) and I18n.TEXT["en"].has("star_%s%s" % [id, part]), "star node %s has text" % id)
+	_check(cost_total > 50, "the tree cannot be filled quickly, so choices matter")
+	DirAccess.remove_absolute(path)
+
+
+func _test_ball_mastery() -> void:
+	var data := SaveData.new(_temp_save_path("mastery"))
+	_check(data.mastery_level("normal") == 0, "mastery starts at zero")
+	data.mastery["normal"] = Balls.mastery_xp(5)
+	_check(data.mastery_level("normal") == 5, "experience becomes levels")
+	data.mastery["normal"] = 9999999
+	_check(data.mastery_level("normal") == Balls.MASTERY_MAX and data.mastery_progress("normal") == 1.0, "mastery stops at its cap")
+	data = SaveData.new(_temp_save_path("mastery_run"))
+	data.record_run(_summary(100, true))
+	_check(int(data.mastery["normal"]) == SaveData.run_xp(2, true, 0), "a run gives its ball experience")
+	var level_0 := _sim(1, {"ball_type": "iron"})
+	var level_5 := _sim(1, {"ball_type": "iron", "mastery": 5})
+	_check(level_5.stat("flat_damage") > level_0.stat("flat_damage"), "mastery strengthens the ball's own speciality")
+	_check(level_5.ball_count == level_0.ball_count + 1, "mastery adds a ball every few levels")
+	var ok := true
+	for id in Balls.ids():
+		ok = ok and Balls.BALLS[id].has("mastery") and I18n.TEXT["ja"].has("ball_%s_mastery" % id) and I18n.TEXT["en"].has("ball_%s_mastery" % id)
+	_check(ok, "every ball has a mastery bonus")
+
+
+func _test_overkill() -> void:
+	var sim := _sim()
+	_single_block(sim, Vector2i(3, 2), 100)
+	var coins_before := sim.coins
+	sim._damage_block(Vector2i(3, 2), 100.0)
+	_check(sim.counters["overkills"] == 0, "an ordinary kill is not an overkill")
+	var ordinary_gain := sim.coins - coins_before
+	for i in 20:
+		_single_block(sim, Vector2i(3, 2), 10)
+		sim._damage_block(Vector2i(3, 2), 1000.0)
+	_check(sim.counters["overkills"] == 20, "a hit far above max HP crushes the block")
+	_check(sim.coins - coins_before - ordinary_gain >= 20, "crushing pays more coins (%d)" % (sim.coins - coins_before))
+	_single_block(sim, Vector2i(3, 2), 10)
+	var before_dot: int = sim.counters["overkills"]
+	sim._damage_block(Vector2i(3, 2), 1000.0, {"dot": true})
+	_check(sim.counters["overkills"] == before_dot, "damage over time never crushes")
 
 
 func _test_next_unlock() -> void:

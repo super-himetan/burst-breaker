@@ -6,9 +6,16 @@ const Achievements := preload("res://data/achievements.gd")
 const Balls := preload("res://data/balls.gd")
 const Perks := preload("res://data/perks.gd")
 const Shop := preload("res://data/shop.gd")
+const StarTree := preload("res://data/star_tree.gd")
 
 const DEFAULT_PATH := "user://save.json"
-const COINS_PER_STAR_SQUARED := 10000.0
+const COINS_PER_STAR_SQUARED := 6000.0
+const STAR_DAMAGE := 0.25
+const POWER_BASE := 100.0
+const POWER_BASE_BALLS := 10.0
+## Experience for simply reaching a stage, and the extra for clearing the run.
+const WIN_XP := 8
+const MAX_TIER_XP := 10
 
 var path := DEFAULT_PATH
 var lang := I18n.DEFAULT_LANG
@@ -34,6 +41,8 @@ var ball_type := "normal"
 var tier := 0
 ## The latest state of a run still in progress, so closing the app cannot lose its coins.
 var interrupted_run := {}
+var star_nodes := {}
+var mastery := {}
 
 
 func _init(save_path := DEFAULT_PATH) -> void:
@@ -71,6 +80,10 @@ func load_file() -> void:
 	ball_type = saved_ball if Balls.BALLS.has(saved_ball) else "normal"
 	tier = int(data.get("tier", tier))
 	interrupted_run = _read_run_summary(data.get("interrupted_run", {}))
+	star_nodes = _int_map(data.get("star_nodes", {}), StarTree.NODES)
+	if star_points_left() < 0:
+		star_nodes = {}
+	mastery = _int_map(data.get("mastery", {}), Balls.BALLS)
 
 
 ## JSON turns every number into a float, and a damaged entry should not break the save.
@@ -140,6 +153,8 @@ func save_file() -> bool:
 		"ball_type": ball_type,
 		"tier": tier,
 		"interrupted_run": interrupted_run,
+		"star_nodes": star_nodes,
+		"mastery": mastery,
 	}, "  "))
 	file.close()
 	return DirAccess.rename_absolute(tmp, path) == OK
@@ -158,6 +173,8 @@ func run_config(emit_events := true) -> Dictionary:
 		"unlocked_perks": unlocked_perks(),
 		"tutorial_offer": runs == 0,
 		"boss_met": bosses_met.keys(),
+		"star_nodes": star_nodes,
+		"mastery": mastery_level(ball_type),
 		"emit_events": emit_events,
 	}
 
@@ -202,7 +219,141 @@ func shop_cost(id: String) -> int:
 
 
 func can_buy(id: String) -> bool:
-	return shop_level(id) < int(Shop.ITEMS[id]["max"]) and coins >= shop_cost(id)
+	return is_shop_item_open(id) and shop_level(id) < int(Shop.ITEMS[id]["max"]) and coins >= shop_cost(id)
+
+
+func is_shop_item_open(id: String) -> bool:
+	return not Shop.ITEMS[id].get("after_all", false) or _regular_items_maxed(shop)
+
+
+func shop_ids() -> Array[String]:
+	var list: Array[String] = []
+	for id in Shop.ids():
+		if is_shop_item_open(id):
+			list.append(id)
+	return list
+
+
+func _regular_items_maxed(levels: Dictionary) -> bool:
+	for id: String in Shop.ITEMS:
+		if not Shop.ITEMS[id].get("after_all", false) and int(levels.get(id, 0)) < int(Shop.ITEMS[id]["max"]):
+			return false
+	return true
+
+
+## What "buy all" takes next. The endless item waits until nothing else is left to save for.
+func _cheapest_item(levels: Dictionary, wallet: int) -> String:
+	var open_endless := _regular_items_maxed(levels)
+	var best := ""
+	var best_cost := wallet + 1
+	for id: String in Shop.ITEMS:
+		var item: Dictionary = Shop.ITEMS[id]
+		var level := int(levels.get(id, 0))
+		if level >= int(item["max"]) or (item.get("after_all", false) and not open_endless):
+			continue
+		var price := Shop.cost(id, level)
+		if price < best_cost:
+			best = id
+			best_cost = price
+	return best
+
+
+func cheapest_item() -> String:
+	return _cheapest_item(shop, coins)
+
+
+## What spending every coin right now would do: {levels, power}.
+func preview_buy_all() -> Dictionary:
+	var levels := shop.duplicate()
+	var wallet: int = coins
+	var bought := 0
+	var id := _cheapest_item(levels, wallet)
+	while id != "":
+		wallet -= Shop.cost(id, int(levels.get(id, 0)))
+		levels[id] = int(levels.get(id, 0)) + 1
+		bought += 1
+		id = _cheapest_item(levels, wallet)
+	return {"levels": bought, "power": power_rating(levels)}
+
+
+## One number for how much stronger the saved progress makes every run.
+func power_rating(levels: Variant = null) -> int:
+	var owned: Dictionary = shop if levels == null else levels
+	var total := {}
+	for id: String in owned:
+		if Shop.ITEMS.has(id):
+			Shop.apply(total, id, int(owned[id]))
+	for id: String in star_nodes:
+		var add: Dictionary = StarTree.NODES[id]["add"]
+		for key: String in add:
+			total[key] = float(total.get(key, 0.0)) + float(add[key]) * int(star_nodes[id])
+	var damage := (1.0 + float(total.get("damage_pct", 0.0))) * float(total.get("damage_mult", 1.0)) * (1.0 + STAR_DAMAGE * stars)
+	var ball_factor := (POWER_BASE_BALLS + float(total.get("ball_count", 0.0))) / POWER_BASE_BALLS
+	var crit_factor := 1.0 + float(total.get("crit_chance", 0.0)) * (1.5 + float(total.get("crit_mult", 0.0)))
+	return int(POWER_BASE * damage * ball_factor * crit_factor)
+
+
+func star_level(id: String) -> int:
+	return int(star_nodes.get(id, 0))
+
+
+func star_points_left() -> int:
+	var spent := 0
+	for id: String in star_nodes:
+		spent += int(StarTree.NODES[id]["cost"]) * int(star_nodes[id])
+	return stars - spent
+
+
+func is_star_node_open(id: String) -> bool:
+	var parent := String(StarTree.NODES[id]["requires"])
+	return parent == "" or star_level(parent) > 0
+
+
+func can_raise_star(id: String) -> bool:
+	var node: Dictionary = StarTree.NODES[id]
+	return is_star_node_open(id) and star_level(id) < int(node["max"]) and star_points_left() >= int(node["cost"])
+
+
+func raise_star(id: String) -> bool:
+	if not can_raise_star(id):
+		return false
+	star_nodes[id] = star_level(id) + 1
+	return true
+
+
+func reset_stars() -> void:
+	star_nodes = {}
+
+
+func mastery_level(ball: String) -> int:
+	var xp := int(mastery.get(ball, 0))
+	var level := 0
+	while level < Balls.MASTERY_MAX and xp >= Balls.mastery_xp(level + 1):
+		level += 1
+	return level
+
+
+## Share of the way to the next mastery level, 1.0 at the cap.
+func mastery_progress(ball: String) -> float:
+	var level := mastery_level(ball)
+	if level >= Balls.MASTERY_MAX:
+		return 1.0
+	var floor_xp := Balls.mastery_xp(level)
+	return float(int(mastery.get(ball, 0)) - floor_xp) / float(Balls.mastery_xp(level + 1) - floor_xp)
+
+
+static func run_xp(stage: int, won: bool, run_tier: int) -> int:
+	return stage + (WIN_XP if won else 0) + mini(run_tier, MAX_TIER_XP)
+
+
+func _gain_mastery(ball: String, xp: int) -> void:
+	if not Balls.BALLS.has(ball):
+		return
+	mastery[ball] = int(mastery.get(ball, 0)) + xp
+	var total := 0
+	for id: String in Balls.BALLS:
+		total += mastery_level(id)
+	lifetime["mastery_levels"] = maxi(stat_value("mastery_levels"), total)
 
 
 func buy(id: String) -> bool:
@@ -231,7 +382,10 @@ func prestige() -> bool:
 		return false
 	stars += stars_on_prestige()
 	lifetime["stars"] = stars
-	coins = 0
+	var kept := 0.0
+	for id: String in star_nodes:
+		kept += float(StarTree.NODES[id]["add"].get("keep_coins", 0.0)) * int(star_nodes[id])
+	coins = int(coins * kept)
 	coins_this_life = 0
 	shop = {}
 	return true
@@ -297,6 +451,7 @@ func record_run(summary: Dictionary) -> bool:
 	coins += earned
 	coins_this_life += earned
 	runs += 1
+	_gain_mastery(String(summary["ball_type"]), run_xp(stage, won, int(summary["tier"])))
 	_add_stat("runs", 1)
 	_add_stat("damage", damage)
 	_add_stat("coins", earned)

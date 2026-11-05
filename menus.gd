@@ -10,10 +10,11 @@ const Bosses := preload("res://data/bosses.gd")
 const BossArt := preload("res://boss_art.gd")
 const Perks := preload("res://data/perks.gd")
 const Shop := preload("res://data/shop.gd")
+const StarTree := preload("res://data/star_tree.gd")
 const Tiers := preload("res://data/tiers.gd")
 const GameSim := preload("res://sim/game_sim.gd")
 
-enum Screen { TITLE, HOWTO, SETTINGS, GAME, LOADOUT, SHOP, ACHIEVEMENTS, CODEX, PRESTIGE }
+enum Screen { TITLE, HOWTO, SETTINGS, GAME, LOADOUT, SHOP, ACHIEVEMENTS, CODEX, PRESTIGE, STARS }
 
 const BASE_W := 720.0
 const BASE_H := 1280.0
@@ -26,6 +27,12 @@ const CODEX_ROW_H := 110.0
 const BLOCK_KINDS: Array[String] = ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]
 const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses"]
 const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
+const BUY_ALL_STEP := 0.07
+const MILESTONE_HOLD := 0.55
+const MILESTONE_SECONDS := 1.3
+const ROW_FLASH_SECONDS := 0.35
+const STAR_INDENT := 30.0
+const BRANCH_COLORS := {"attack": Color("ff7a8a"), "burst": Color("4fd1ff"), "fortune": Color("ffd84d")}
 
 var host: Node2D
 var save: RefCounted
@@ -34,6 +41,12 @@ var codex_tab := "perks"
 var confirm_prestige := false
 var _achievement_rows: Array[Dictionary] = []
 var _achievements_done := 0
+var _buying := false
+var _buy_timer := 0.0
+var _buy_chain := 0
+var _milestone_id := ""
+var _milestone_time := 0.0
+var _row_flash := {}
 
 
 func _init(host_node: Node2D, save_data: RefCounted) -> void:
@@ -52,12 +65,47 @@ func num(value: int) -> String:
 func on_enter(screen: int) -> void:
 	scroll = 0.0
 	confirm_prestige = false
+	_buying = false
+	_milestone_time = 0.0
+	_row_flash = {}
 	if screen == Screen.ACHIEVEMENTS:
 		_rebuild_achievements()
 
 
 func is_list_screen(screen: int) -> bool:
-	return screen in [Screen.SHOP, Screen.ACHIEVEMENTS, Screen.CODEX]
+	return screen in [Screen.SHOP, Screen.ACHIEVEMENTS, Screen.CODEX, Screen.STARS]
+
+
+func update(delta: float, screen: int) -> void:
+	_milestone_time = maxf(_milestone_time - delta, 0.0)
+	for id: String in _row_flash.keys():
+		_row_flash[id] = float(_row_flash[id]) - delta
+		if float(_row_flash[id]) <= 0.0:
+			_row_flash.erase(id)
+	if not _buying or screen != Screen.SHOP:
+		return
+	_buy_timer -= delta
+	if _buy_timer > 0.0:
+		return
+	var id: String = save.cheapest_item()
+	if id == "":
+		_buying = false
+		return
+	_buy_chain += 1
+	_buy_timer = BUY_ALL_STEP
+	_buy_item(id)
+	if _milestone_time > 0.0:
+		_buy_timer = MILESTONE_HOLD
+
+
+func _buy_item(id: String) -> void:
+	if not save.buy(id):
+		return
+	_row_flash[id] = ROW_FLASH_SECONDS
+	if Shop.is_milestone(id, save.shop_level(id)):
+		_milestone_id = id
+		_milestone_time = MILESTONE_SECONDS
+	host.on_shop_bought(id, _buy_chain)
 
 
 func _rebuild_achievements() -> void:
@@ -103,14 +151,20 @@ func buttons(screen: int) -> Array[Dictionary]:
 				var id := ball_ids[i]
 				var rect := Rect2(50.0 + (i % 2) * 315.0, 145.0 + (i / 2) * 104.0, 305.0, 92.0)
 				var style := "selected" if save.ball_type == id else ("normal" if save.is_ball_unlocked(id) else "disabled")
-				list.append(_button("ball_" + id, rect, t("ball_" + id) if save.is_ball_unlocked(id) else t("locked"), style))
+				list.append(_button("ball_" + id, rect, _ball_label(id), style))
 			if save.max_tier() > 0:
 				list.append(_button("tier_down", Rect2(50.0, 660.0, 100.0, 80.0), "<", "normal" if save.tier > 0 else "disabled"))
 				list.append(_button("tier_up", Rect2(570.0, 660.0, 100.0, 80.0), ">", "normal" if save.tier < save.max_tier() else "disabled"))
 			list.append(_button("go", Rect2(90.0, 990.0, 540.0, 120.0), t("go"), "primary"))
 			list.append(_button("back", Rect2(180.0, 1128.0, 360.0, 84.0), t("back")))
-		Screen.SHOP, Screen.ACHIEVEMENTS:
+		Screen.SHOP:
+			list.append(_button("buy_all", Rect2(60.0, 1120.0, 290.0, 92.0), t("buy_all"), "normal" if save.cheapest_item() != "" else "disabled"))
+			list.append(_button("back", Rect2(370.0, 1120.0, 290.0, 92.0), t("back")))
+		Screen.ACHIEVEMENTS:
 			list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
+		Screen.STARS:
+			list.append(_button("stars_reset", Rect2(60.0, 1120.0, 290.0, 92.0), t("stars_reset"), "normal" if not save.star_nodes.is_empty() else "disabled"))
+			list.append(_button("back", Rect2(370.0, 1120.0, 290.0, 92.0), t("back")))
 		Screen.CODEX:
 			for i in CODEX_TABS.size():
 				var tab := CODEX_TABS[i]
@@ -123,9 +177,17 @@ func buttons(screen: int) -> Array[Dictionary]:
 				list.append(_button("prestige_no", Rect2(370.0, 720.0, 280.0, 110.0), t("no")))
 			else:
 				var style := "primary" if save.can_prestige() else "disabled"
-				list.append(_button("prestige_do", Rect2(90.0, 800.0, 540.0, 130.0), t("prestige_do"), style))
+				list.append(_button("prestige_do", Rect2(90.0, 780.0, 540.0, 130.0), t("prestige_do"), style))
+				list.append(_button("stars", Rect2(90.0, 930.0, 540.0, 100.0), t("stars_tree"), "normal" if int(save.stars) > 0 else "disabled"))
 				list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
 	return list
+
+
+func _ball_label(id: String) -> String:
+	if not save.is_ball_unlocked(id):
+		return t("locked")
+	var level: int = save.mastery_level(id)
+	return t("ball_" + id) if level == 0 else "%s  Lv%d" % [t("ball_" + id), level]
 
 
 ## Handles buttons that only change menu state. Returns true when it consumed the id.
@@ -144,6 +206,14 @@ func press(id: String) -> bool:
 		"tier_up", "tier_down":
 			save.set_tier(int(save.tier) + (1 if id == "tier_up" else -1))
 			save.save_file()
+		"buy_all":
+			if save.cheapest_item() != "":
+				_buying = true
+				_buy_timer = 0.0
+				_buy_chain = 0
+		"stars_reset":
+			save.reset_stars()
+			save.save_file()
 		"prestige_do":
 			if save.can_prestige():
 				confirm_prestige = true
@@ -161,7 +231,9 @@ func press(id: String) -> bool:
 func list_height(screen: int) -> float:
 	match screen:
 		Screen.SHOP:
-			return Shop.ids().size() * (SHOP_ROW_H + ROW_GAP)
+			return save.shop_ids().size() * (SHOP_ROW_H + ROW_GAP)
+		Screen.STARS:
+			return StarTree.ids().size() * (SHOP_ROW_H + ROW_GAP)
 		Screen.ACHIEVEMENTS:
 			return _achievement_rows.size() * (ACHIEVEMENT_ROW_H + ROW_GAP)
 		Screen.CODEX:
@@ -175,17 +247,24 @@ func scroll_by(screen: int, amount: float) -> void:
 
 
 func tap_list(screen: int, p: Vector2) -> void:
-	if screen != Screen.SHOP or p.y < LIST_TOP or p.y > LIST_BOTTOM:
+	if p.y < LIST_TOP or p.y > LIST_BOTTOM or not screen in [Screen.SHOP, Screen.STARS]:
 		return
 	var index := int((p.y - LIST_TOP + scroll) / (SHOP_ROW_H + ROW_GAP))
-	var ids := Shop.ids()
-	if index >= 0 and index < ids.size() and save.buy(ids[index]):
-		host.on_shop_bought()
+	var ids: Array[String] = save.shop_ids() if screen == Screen.SHOP else StarTree.ids()
+	if index < 0 or index >= ids.size():
+		return
+	if screen == Screen.STARS:
+		if save.raise_star(ids[index]):
+			_row_flash[ids[index]] = ROW_FLASH_SECONDS
+			host.on_star_raised()
+		return
+	_buy_chain = 0
+	_buy_item(ids[index])
 
 
 ## Screen position of a shop row, for the end-to-end check.
 func shop_row_center(id: String) -> Vector2:
-	return Vector2(BASE_W / 2.0, LIST_TOP + Shop.ids().find(id) * (SHOP_ROW_H + ROW_GAP) + SHOP_ROW_H / 2.0 - scroll)
+	return Vector2(BASE_W / 2.0, LIST_TOP + save.shop_ids().find(id) * (SHOP_ROW_H + ROW_GAP) + SHOP_ROW_H / 2.0 - scroll)
 
 
 ## Everything fixed on screen. Scrolling rows are drawn separately by draw_list, clipped.
@@ -201,8 +280,15 @@ func draw(screen: int) -> void:
 		Screen.LOADOUT:
 			_draw_loadout()
 		Screen.SHOP:
-			_heading(t("shop"), 66.0)
-			_wallet_line(150.0)
+			_heading(t("shop"), 58.0)
+			_wallet_line(128.0)
+			var power := t("power_rating") % num(save.power_rating())
+			host.text_center(Vector2(BASE_W / 2.0, 178.0), power, 26, UI.MINT)
+			_draw_milestone()
+		Screen.STARS:
+			_heading(t("stars_tree"), 66.0)
+			var left := t("stars_left") % [save.star_points_left(), save.stars]
+			host.text_center(Vector2(BASE_W / 2.0, 150.0), left, host.fit_size(left, 30, 620.0), UI.STAR)
 		Screen.ACHIEVEMENTS:
 			_heading(t("achievements"), 66.0)
 			host.text_center(Vector2(BASE_W / 2.0, 160.0), t("achievement_count") % [_achievements_done, _achievement_rows.size()], 26, UI.MUTED, host.font_body)
@@ -226,6 +312,8 @@ func draw_list(screen: int) -> void:
 			_draw_achievements()
 		Screen.CODEX:
 			_draw_codex()
+		Screen.STARS:
+			_draw_star_tree()
 
 
 func draw_buttons(list: Array[Dictionary], time: float) -> void:
@@ -263,16 +351,65 @@ func draw_buttons(list: Array[Dictionary], time: float) -> void:
 		if button["id"] == "shop" and _any_purchase_available():
 			host.soft_glow(dot, Vector2(44.0, 44.0), Color(UI.ACCENT, 0.7))
 			host.canvas.draw_circle(dot, 8.0, UI.ACCENT)
-		if button["id"] == "prestige" and save.can_prestige():
+		if button["id"] == "prestige" and (save.can_prestige() or _can_spend_stars()):
 			host.soft_glow(dot, Vector2(44.0, 44.0), Color(UI.STAR, 0.7))
 			host.canvas.draw_circle(dot, 8.0, UI.STAR)
 
 
 func _any_purchase_available() -> bool:
-	for id in Shop.ids():
-		if save.can_buy(id):
+	return save.cheapest_item() != ""
+
+
+func _can_spend_stars() -> bool:
+	for id in StarTree.ids():
+		if save.can_raise_star(id):
 			return true
 	return false
+
+
+func _draw_milestone() -> void:
+	if _milestone_time <= 0.0:
+		return
+	var age := MILESTONE_SECONDS - _milestone_time
+	var alpha := minf(_milestone_time * 3.0, 1.0)
+	var pop := 1.0 + maxf(0.18 - age, 0.0) * 2.0
+	var center := Vector2(BASE_W / 2.0, 640.0)
+	host.soft_glow(center, Vector2(1000.0, 460.0), Color(UI.GOLD, 0.4 * alpha))
+	var title := t("level") % save.shop_level(_milestone_id) + "  " + t("shop_" + _milestone_id)
+	host.text_shadowed(center + Vector2(0.0, -44.0), title, int(host.fit_size(title, 46, 640.0) * pop), Color(UI.TEXT, alpha))
+	var bonus := t("shop_%s_bonus" % _milestone_id)
+	host.text_shadowed(center + Vector2(0.0, 28.0), bonus, int(host.fit_size(bonus, 64, 640.0) * pop), Color(UI.GOLD, alpha))
+
+
+func _draw_star_tree() -> void:
+	var ids := StarTree.ids()
+	for i in ids.size():
+		var y := LIST_TOP + i * (SHOP_ROW_H + ROW_GAP) - scroll
+		if y > LIST_BOTTOM or y + SHOP_ROW_H < LIST_TOP:
+			continue
+		var id := ids[i]
+		var node: Dictionary = StarTree.NODES[id]
+		var level: int = save.star_level(id)
+		var opened: bool = save.is_star_node_open(id)
+		var can_raise: bool = save.can_raise_star(id)
+		var color: Color = BRANCH_COLORS[node["branch"]]
+		var indent := StarTree.depth(id) * STAR_INDENT
+		var rect := Rect2(40.0 + indent, y, 640.0 - indent, SHOP_ROW_H)
+		host.panel(rect, UI.PANEL, 26.0, Color(color, 0.8) if can_raise else UI.LINE, 2)
+		if _row_flash.has(id):
+			host.panel(rect, Color(color, 0.35 * float(_row_flash[id]) / ROW_FLASH_SECONDS), 26.0)
+		host.panel(Rect2(rect.position + Vector2(14.0, 22.0), Vector2(8.0, SHOP_ROW_H - 44.0)), color if opened else Color(color, 0.25), 4.0)
+		var title_color: Color = UI.TEXT if opened else Color(UI.MUTED, 0.7)
+		var name_width := 400.0 - indent
+		var title := t("star_" + id)
+		host.text_left(Vector2(rect.position.x + 36.0, y + 40.0), title, host.fit_size(title, 30, name_width), title_color)
+		var desc: String = t("star_%s_desc" % id) if opened else t("star_locked") % t("star_" + String(node["requires"]))
+		host.text_left(Vector2(rect.position.x + 36.0, y + 82.0), desc, host.fit_size(desc, 23, name_width), UI.MUTED, host.font_body)
+		host.text_center(Vector2(586.0, y + 36.0), "%d / %d" % [level, int(node["max"])], 22, UI.MUTED, host.font_body)
+		var maxed := level >= int(node["max"])
+		var price: String = t("max_level") if maxed else t("star_cost") % int(node["cost"])
+		var price_color: Color = UI.MINT if maxed else (UI.STAR if can_raise else Color(UI.STAR, 0.4))
+		host.text_center(Vector2(586.0, y + 78.0), price, 30, price_color)
 
 
 func _wallet_line(y: float) -> void:
@@ -335,6 +472,7 @@ func _draw_loadout() -> void:
 		if save.is_ball_unlocked(id):
 			var dot := Vector2(50.0 + (i % 2) * 315.0 + 38.0, 145.0 + (i / 2) * 104.0 + 46.0)
 			host.soft_glow_deferred(dot, String(Balls.BALLS[id]["color"]))
+	_draw_mastery(578.0)
 	var desc := t("ball_%s_desc" % save.ball_type)
 	host.text_center(Vector2(BASE_W / 2.0, 612.0), desc, host.fit_size(desc, 28, 640.0), UI.TEXT, host.font_body)
 	var move := t("burst_move") % t("burst_" + String(save.ball_type))
@@ -358,12 +496,24 @@ func _draw_loadout() -> void:
 		host.text_center(Vector2(BASE_W / 2.0, 825.0 + i * 36.0), line, host.fit_size(line, 24, 640.0), UI.MUTED, host.font_body)
 
 
+func _draw_mastery(y: float) -> void:
+	var ball: String = save.ball_type
+	var level: int = save.mastery_level(ball)
+	var line: String = t("mastery_line") % [level, t("ball_%s_mastery" % ball)]
+	host.text_left(Vector2(50.0, y), line, host.fit_size(line, 22, 470.0), UI.MINT, host.font_body)
+	var bar := Rect2(530.0, y - 6.0, 140.0, 12.0)
+	var progress: float = save.mastery_progress(ball)
+	host.panel(bar, Color(1.0, 1.0, 1.0, 0.08), 6.0)
+	if progress > 0.0:
+		host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 12.0), bar.size.y)), UI.MINT, 6.0)
+
+
 func _scale_text(value: float) -> String:
 	return "%.1f" % value if value < 100.0 else num(int(value))
 
 
 func _draw_shop() -> void:
-	var ids := Shop.ids()
+	var ids: Array[String] = save.shop_ids()
 	for i in ids.size():
 		var y := LIST_TOP + i * (SHOP_ROW_H + ROW_GAP) - scroll
 		if y > LIST_BOTTOM or y + SHOP_ROW_H < LIST_TOP:
@@ -374,10 +524,16 @@ func _draw_shop() -> void:
 		var buyable: bool = save.can_buy(id)
 		var rect := Rect2(40.0, y, 640.0, SHOP_ROW_H)
 		host.panel(rect, UI.PANEL, 26.0, Color(UI.GOLD, 0.55) if buyable else UI.LINE, 2)
+		if _row_flash.has(id):
+			host.panel(rect, Color(UI.GOLD, 0.35 * float(_row_flash[id]) / ROW_FLASH_SECONDS), 26.0)
 		var title := t("shop_" + id)
-		host.text_left(Vector2(70.0, y + 40.0), title, host.fit_size(title, 30, 390.0), UI.TEXT)
+		host.text_left(Vector2(70.0, y + 30.0), title, host.fit_size(title, 28, 390.0), UI.TEXT)
 		var desc := t("shop_%s_desc" % id)
-		host.text_left(Vector2(70.0, y + 82.0), desc, host.fit_size(desc, 24, 390.0), UI.MUTED, host.font_body)
+		host.text_left(Vector2(70.0, y + 64.0), desc, host.fit_size(desc, 22, 390.0), UI.MUTED, host.font_body)
+		var next := Shop.next_milestone(id, level)
+		if next > 0:
+			var milestone := t("milestone_line") % [next, t("shop_%s_bonus" % id)]
+			host.text_left(Vector2(70.0, y + 94.0), milestone, host.fit_size(milestone, 21, 390.0), UI.GOLD, host.font_body)
 		host.text_center(Vector2(570.0, y + 36.0), t("level") % level, 22, UI.MUTED, host.font_body)
 		var price: String = t("max_level") if maxed else num(save.shop_cost(id))
 		var price_color: Color = UI.MINT if maxed else (UI.GOLD if buyable else Color(UI.GOLD, 0.45))

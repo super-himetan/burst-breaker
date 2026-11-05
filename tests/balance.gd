@@ -9,7 +9,7 @@ const SaveData := preload("res://save_data.gd")
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
 const Bosses := preload("res://data/bosses.gd")
-const Shop := preload("res://data/shop.gd")
+const StarTree := preload("res://data/star_tree.gd")
 
 const DT := 1.0 / 60.0
 ## What a person adds on top of simulated shot time.
@@ -169,18 +169,15 @@ func _record(save: SaveData, result: Dictionary) -> void:
 
 ## Spends coins the way a player would: damage first, then whatever is cheapest.
 func _spend(save: SaveData) -> void:
-	var bought := true
-	while bought:
-		bought = false
-		var best := ""
-		var best_cost := INF
-		for id in Shop.ids():
-			if save.can_buy(id) and float(save.shop_cost(id)) < best_cost:
-				best = id
-				best_cost = save.shop_cost(id)
-		if best != "":
-			save.buy(best)
-			bought = true
+	var id := save.cheapest_item()
+	while id != "":
+		save.buy(id)
+		id = save.cheapest_item()
+	var raised := true
+	while raised:
+		raised = false
+		for node in StarTree.ids():
+			raised = save.raise_star(node) or raised
 
 
 func _campaign(total_runs: int, seed_value: int) -> void:

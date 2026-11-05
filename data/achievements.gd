@@ -21,6 +21,8 @@ const TRACKS := {
 	"best_tier": [1, 2, 3, 5, 7, 10, 15, 20],
 	"stars": [1, 5, 10, 25, 50, 100],
 	"shop_levels": [5, 15, 30, 60, 90],
+	"mastery_levels": [3, 10, 25, 50, 80],
+	"overkills": [100, 1000, 10000, 50000, 200000],
 	"clears_normal": [1],
 	"clears_iron": [1],
 	"clears_fire": [1],
@@ -38,7 +40,7 @@ const TRACKS := {
 }
 
 ## Stats where the highest single value counts, instead of a running total.
-const BEST_STATS: Array[String] = ["best_combo", "best_shot", "best_tier", "stars", "shop_levels", "perks_seen"]
+const BEST_STATS: Array[String] = ["best_combo", "best_shot", "best_tier", "stars", "shop_levels", "perks_seen", "mastery_levels"]
 
 ## Which achievement unlocks each locked perk.
 const PERK_UNLOCKS := {

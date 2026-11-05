@@ -13,6 +13,7 @@ const Balls := preload("res://data/balls.gd")
 const Bosses := preload("res://data/bosses.gd")
 const BossArt := preload("res://boss_art.gd")
 const Achievements := preload("res://data/achievements.gd")
+const Shop := preload("res://data/shop.gd")
 const UI := preload("res://ui_theme.gd")
 const BackgroundShader := preload("res://shaders/background.gdshader")
 const ImpactShader := preload("res://shaders/impact.gdshader")
@@ -37,6 +38,9 @@ const MUSIC_VOLUME_DB := -13.0
 const REDUCED_FX_SCALE := 0.25
 const WHEEL_SCROLL := 70.0
 const PAN_SCROLL := 24.0
+const COUNT_UP_SECONDS := 1.0
+const COUNT_UP_TICK := 0.07
+const OVERKILL_TEXT_GAP := 0.12
 
 var sim: GameSim
 var save: SaveData
@@ -121,6 +125,11 @@ var next_player := 0
 var music_player: AudioStreamPlayer
 var music_task := -1
 var music_pcm := PackedByteArray()
+var end_age := 0.0
+var last_tick_sound := 0.0
+var last_overkill_text := 0.0
+var end_preview := {}
+var run_mastery_before := 0
 var verify_stats := {"max_balls": 0, "explosions": 0, "splits": 0}
 
 
@@ -251,6 +260,8 @@ func _on_back_request() -> void:
 			_set_screen(settings_return)
 		Menus.Screen.SHOP:
 			_set_screen(shop_return)
+		Menus.Screen.STARS:
+			_set_screen(Menus.Screen.PRESTIGE)
 		Menus.Screen.GAME:
 			if paused:
 				_set_paused(false)
@@ -266,6 +277,7 @@ func t(key: String) -> String:
 
 func _set_screen(next: int) -> void:
 	screen = next
+	end_preview = save.preview_buy_all()
 	screen_age = 0.0
 	aiming = false
 	list_active = false
@@ -297,6 +309,8 @@ func _start_run() -> void:
 	run_banked = false
 	run_seconds = 0.0
 	run_new_record = false
+	end_age = 0.0
+	run_mastery_before = save.mastery_level(save.ball_type)
 	paused = false
 	aiming = false
 	particles.clear()
@@ -328,7 +342,11 @@ func _bank_run() -> void:
 	if sim.total_damage == 0:
 		return
 	run_new_record = save.record_run(_run_summary())
+	var mastery_now := save.mastery_level(sim.ball_type)
+	if mastery_now > run_mastery_before:
+		toasts.append({"text": t("mastery_toast") % [t("ball_" + sim.ball_type), mastery_now], "t": 0.0})
 	on_progress_changed()
+	end_preview = save.preview_buy_all()
 
 
 func _run_summary() -> Dictionary:
@@ -368,8 +386,18 @@ func on_progress_changed(live := {}) -> void:
 	save.save_file()
 
 
-func on_shop_bought() -> void:
-	_play("coin", 1.2)
+func on_star_raised() -> void:
+	_play("win", 1.7)
+	on_progress_changed()
+
+
+func on_shop_bought(id: String, chain: int) -> void:
+	_play("coin", 1.1 + minf(chain * 0.03, 1.2))
+	if Shop.is_milestone(id, save.shop_level(id)):
+		_play("win", 1.4)
+		trauma = minf(trauma + 0.6, 1.0)
+		if save.vibration and OS.has_feature("mobile"):
+			Input.vibrate_handheld(50)
 	on_progress_changed()
 
 
@@ -430,6 +458,7 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
 	time += delta
 	_poll_music()
+	menus.update(delta, screen)
 	var view := get_viewport_rect().size
 	y_offset = maxf((view.y - BASE_H) / 2.0, 0.0)
 	screen_age += delta
@@ -462,6 +491,8 @@ func _process_game(delta: float) -> void:
 		screen_age = 0.0
 	if not is_run_over():
 		run_seconds += delta
+	elif boss_down <= 0.0:
+		_process_count_up(delta)
 	if boss_intro >= 0.0:
 		_process_boss_intro(delta)
 		return
@@ -485,6 +516,24 @@ func _process_game(delta: float) -> void:
 	_note_offered_perks()
 	if is_run_over():
 		_bank_run()
+
+
+## The results count up with rising ticks, so a good run takes a moment to sink in.
+func _process_count_up(delta: float) -> void:
+	var before := end_age
+	end_age += delta
+	if sim.coins <= 0 or before >= COUNT_UP_SECONDS:
+		return
+	if end_age >= COUNT_UP_SECONDS:
+		_play("win", 1.5)
+	elif time - last_tick_sound >= COUNT_UP_TICK:
+		last_tick_sound = time
+		_play("coin", 0.9 + end_age / COUNT_UP_SECONDS)
+
+
+func _counted(value: int) -> int:
+	var k := clampf(end_age / COUNT_UP_SECONDS, 0.0, 1.0)
+	return int(value * (1.0 - pow(1.0 - k, 3.0)))
 
 
 func _begin_burst() -> void:
@@ -740,6 +789,8 @@ func _press_button(id: String) -> void:
 		"shop":
 			shop_return = screen
 			_set_screen(Menus.Screen.SHOP)
+		"stars":
+			_set_screen(Menus.Screen.STARS)
 		"achievements":
 			_set_screen(Menus.Screen.ACHIEVEMENTS)
 		"codex":
@@ -757,6 +808,8 @@ func _press_button(id: String) -> void:
 					_set_screen(settings_return)
 				Menus.Screen.SHOP:
 					_set_screen(shop_return)
+				Menus.Screen.STARS:
+					_set_screen(Menus.Screen.PRESTIGE)
 				_:
 					_set_screen(Menus.Screen.TITLE)
 		"lang_ja", "lang_en":
@@ -803,7 +856,8 @@ func current_buttons() -> Array[Dictionary]:
 		list.append(_button("to_title", Rect2(110.0, 810.0, 500.0, 100.0), t("to_title")))
 	elif is_run_over():
 		list.append(_button("restart", Rect2(70.0, 930.0, 580.0, 120.0), t("retry"), "primary"))
-		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop")))
+		var can_buy: int = end_preview.get("levels", 0)
+		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop_can_buy") % can_buy if can_buy > 0 else t("shop")))
 		list.append(_button("to_title", Rect2(368.0, 1066.0, 282.0, 100.0), t("to_title")))
 	elif sim.state == GameSim.State.UPGRADE:
 		if sim.rerolls > 0:
@@ -936,6 +990,8 @@ func _on_kill(e: Dictionary) -> void:
 	var kind: String = e["kind"]
 	var color: Color = UI.BLOCKS.get(kind, UI.ramp(randf()))
 	var is_boss := kind == "boss"
+	if int(e.get("overkill", 0)) > 0:
+		_on_overkill(e)
 	_spawn_particles(e["pos"], color, 70 if is_boss else 16, 900.0 if is_boss else 420.0)
 	_spawn_particles(e["pos"], Color.WHITE, 30 if is_boss else 6, 600.0 if is_boss else 280.0)
 	trauma = minf(trauma + (1.0 if is_boss else 0.12), 1.0)
@@ -962,6 +1018,15 @@ func _on_kill(e: Dictionary) -> void:
 			"vel": Vector2.from_angle(randf() * TAU) * randf_range(180.0, 460.0),
 			"t": 0.0,
 		})
+
+
+## Outgrown blocks burst harder and say so, but never so often that the text becomes noise.
+func _on_overkill(e: Dictionary) -> void:
+	_spawn_particles(e["pos"], UI.GOLD, 10 + int(e["overkill"]) * 4, 620.0)
+	if time - last_overkill_text < OVERKILL_TEXT_GAP:
+		return
+	last_overkill_text = time
+	numbers.append({"pos": e["pos"] + Vector2(0.0, -24.0), "text": t("overkill"), "t": 0.0, "big": true, "dot": false})
 
 
 func _on_explode(e: Dictionary) -> void:
@@ -1725,20 +1790,26 @@ func _draw_end_screen(title: String, color: Color) -> void:
 		panel(chip, Color(UI.GOLD, 0.14 + sin(time * 5.0) * 0.05), 24.0, UI.GOLD, 2)
 		text_center(chip.get_center(), t("new_record"), fit_size(t("new_record"), 25, 270.0), UI.GOLD)
 	text_center(Vector2(BASE_W / 2.0, 272.0), t("total_damage"), 20, UI.MUTED, font_label)
-	text_center(Vector2(BASE_W / 2.0, 326.0), I18n.format_number(sim.total_damage), 72, UI.TEXT)
+	text_center(Vector2(BASE_W / 2.0, 326.0), I18n.format_number(_counted(sim.total_damage)), 72, UI.TEXT)
 	panel(Rect2(70.0, 376.0, 580.0, 240.0), UI.PANEL, 28.0, UI.LINE, 2)
 	var seconds := int(run_seconds)
 	var rows := [
 		["best_shot", I18n.format_number(sim.best_shot_damage)],
 		["best_combo", str(sim.best_combo)],
-		["coins", t("coins_balance") % [I18n.format_number(sim.coins), I18n.format_number(save.coins)]],
+		["coins", t("coins_balance") % [I18n.format_number(_counted(sim.coins)), I18n.format_number(save.coins - sim.coins + _counted(sim.coins))]],
 		["reached", "%d / %d" % [sim.stage + 1, GameSim.STAGES.size()]],
 		["play_time", "%d:%02d" % [seconds / 60, seconds % 60]],
+		["mastery_row", "%s Lv %d  +%d" % [t("ball_" + sim.ball_type), save.mastery_level(sim.ball_type), SaveData.run_xp(sim.stage + 1, sim.state == GameSim.State.WON, sim.tier)]],
 	]
 	for i in rows.size():
-		row(Vector2(105.0, 408.0 + i * 44.0), 510.0, t(rows[i][0]), rows[i][1], 26, UI.TEXT)
+		row(Vector2(105.0, 404.0 + i * 38.0), 510.0, t(rows[i][0]), rows[i][1], 24, UI.TEXT)
 	_draw_next_unlock(Rect2(70.0, 628.0, 580.0, 88.0))
 	_draw_build(734.0, 3)
+	var after: int = end_preview.get("power", 0)
+	var now := save.power_rating()
+	if after > now:
+		var gain := t("power_gain") % ceili(100.0 * float(after - now) / float(now))
+		text_center(Vector2(BASE_W / 2.0, 908.0), gain, fit_size(gain, 24, 600.0), UI.GOLD)
 
 
 ## Says what ended the run, so the next one has something to try differently.
