@@ -61,6 +61,14 @@ const DOKAN_THROWS := 2
 const ZERO_WALL_ROWS := 4
 ## Boss tricks never place blocks closer to the danger line than this.
 const BOSS_REACH_MARGIN := 4
+## Each owned level sharing a tag raises a perk's odds, up to a cap so offers never lock in.
+const SYNERGY_PER_LEVEL := 0.6
+const SYNERGY_LEVEL_CAP := 5
+## A perk that would complete an evolution right now.
+const SYNERGY_PARTNER_MULT := 3.0
+## A skipped evolution keeps coming back at about the odds of a common perk.
+const EVOLUTION_RETURN_MULT := 25.0
+const PLAGUE_SHARE := 0.5
 
 
 class Ball:
@@ -129,10 +137,12 @@ var _burst_shot := false
 var _burst_shot_gain := 0.0
 var _boss_met: Array = []
 var boss_force := ""
+var boss_force_own_pool := false
 
 
 ## config: ball_type, tier, shop ({id: level}), stars, unlocked_perks (null = all),
-## tutorial_offer, emit_events, boss_met (ids to meet last), boss_force (always this boss).
+## tutorial_offer, emit_events, boss_met (ids to meet last), boss_force (always this boss),
+## boss_force_own_pool (boss_force only on the stage that boss normally appears on).
 func new_run(seed_value: int, config := {}) -> void:
 	_rng.seed = seed_value
 	state = State.AIM
@@ -147,6 +157,7 @@ func new_run(seed_value: int, config := {}) -> void:
 	emit_events = bool(config.get("emit_events", true))
 	_boss_met = config.get("boss_met", [])
 	boss_force = String(config.get("boss_force", ""))
+	boss_force_own_pool = bool(config.get("boss_force_own_pool", false))
 	_base_stats = _build_base_stats(config)
 	_coin_scale = Tiers.coin_scale(tier) * (1.0 + STAR_COINS * int(config.get("stars", 0)))
 	launch_x = FIELD_X + FIELD_W / 2.0
@@ -384,7 +395,12 @@ func reroll_choices() -> bool:
 	if state != State.UPGRADE or rerolls <= 0:
 		return false
 	rerolls -= 1
-	choices = _roll_choices()
+	# Rerolling for a better second card should not throw away an evolution on the table.
+	var keep: Array[String] = []
+	for id in choices:
+		if Perks.is_evolution(id):
+			keep.append(id)
+	choices = _roll_choices(keep)
 	_emit({"type": "reroll"})
 	return true
 
@@ -501,7 +517,7 @@ func boss_id() -> String:
 
 ## Bosses the player has not met yet come first, so the whole cast shows up quickly.
 func _pick_boss(pool: int) -> String:
-	if boss_force != "":
+	if boss_force != "" and (not boss_force_own_pool or int(Bosses.BOSSES[boss_force]["pool"]) == pool):
 		return boss_force
 	var options := Bosses.in_pool(pool)
 	var fresh := options.filter(func(id: String) -> bool: return not _boss_met.has(id))
@@ -678,6 +694,8 @@ func _try_rebound(ball: Ball) -> bool:
 		ball.pos.y = LAUNCH_Y
 		ball.vel.y = -absf(ball.vel.y)
 		_emit({"type": "rebound", "pos": ball.pos})
+		if stat("floor_wall") > 0.0:
+			_on_wall(ball, false)
 	return saved
 
 
@@ -685,6 +703,8 @@ func _on_wall(ball: Ball, is_top: bool) -> void:
 	ball.wall_bonus += stat("wall_damage")
 	if is_top:
 		ball.wall_bonus += stat("top_damage")
+	if stat("first_refresh") > 0.0:
+		ball.hits = 0
 	_emit({"type": "wall", "pos": ball.pos})
 	if stat("homing_chance") > 0.0 and _rng.randf() < stat("homing_chance") and not blocks.is_empty():
 		var target := _nearest_block_center(ball.pos)
@@ -790,6 +810,8 @@ func _scale_damage(damage: float, block: Dictionary) -> float:
 		scaled *= 1.0 + stat("opener")
 	if stat("last_stand") > 0.0 and _lowest_row() >= death_row - 3:
 		scaled *= 2.0
+	if stat("safe_damage") > 0.0:
+		scaled *= 1.0 + stat("safe_damage") * maxi(death_row - _lowest_row() - 1, 0)
 	if block["kind"] == "boss":
 		scaled *= 1.0 + stat("boss_damage")
 	return scaled
@@ -896,7 +918,23 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
 	if kind == "boss":
 		_wipe_minions()
 		return
+	_spread_plague(cell, int(block["poison"]))
 	_on_kill_effects(cell, kind, flags)
+
+
+## Plague: a poisoned block that dies passes part of its poison to its neighbours.
+func _spread_plague(cell: Vector2i, poison: int) -> void:
+	if stat("plague") <= 0.0 or poison <= 0:
+		return
+	var passed := maxi(int(poison * PLAGUE_SHARE), 1)
+	var seen := {}
+	for side in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.UP, Vector2i.DOWN]:
+		var target: Vector2i = cell + side
+		if not blocks.has(target) or seen.has(blocks[target]["id"]):
+			continue
+		seen[blocks[target]["id"]] = true
+		blocks[target]["poison"] = int(blocks[target]["poison"]) + passed
+		_emit({"type": "plague", "pos": block_rect(blocks[target]).get_center()})
 
 
 ## Fractions carry over, so small rewards still add up exactly.
@@ -1391,6 +1429,10 @@ func _open_upgrade() -> void:
 		state = State.AIM
 
 
+func _is_perk_unlocked(id: String) -> bool:
+	return unlocked_perks == null or (unlocked_perks as Array).has(id)
+
+
 func _is_perk_available(id: String) -> bool:
 	var perk: Dictionary = Perks.PERKS[id]
 	if int(levels[id]) >= int(perk["max"]):
@@ -1400,41 +1442,91 @@ func _is_perk_available(id: String) -> bool:
 			if int(levels[required]) <= 0:
 				return false
 		return true
-	if unlocked_perks == null:
-		return true
-	return (unlocked_perks as Array).has(id)
+	if perk.has("needs") and stat(String(perk["needs"])) <= 0.0:
+		return false
+	return _is_perk_unlocked(id)
 
 
-func _roll_choices() -> Array[String]:
+## How much of each build this run already has: owned perk levels plus the ball's leaning.
+func tag_levels() -> Dictionary:
+	var totals := {}
+	for tag: String in (Balls.BALLS.get(ball_type, Balls.BALLS["normal"]) as Dictionary)["tags"]:
+		totals[tag] = 1
+	for id: String in levels:
+		var level: int = levels[id]
+		if level > 0:
+			for tag in Perks.tags_of(id):
+				totals[tag] = int(totals.get(tag, 0)) + level
+	return totals
+
+
+## Where a perk leads: {evolution, partner, ready}, where `ready` means taking this perk
+## makes the evolution reachable. Empty when it leads nowhere new.
+func evolution_hint(id: String) -> Dictionary:
+	if Perks.is_evolution(id):
+		return {}
+	var waiting := {}
+	for evolution in Perks.evolutions_of(id):
+		if int(levels[evolution]) > 0:
+			continue
+		var requires: Array = Perks.PERKS[evolution]["requires"]
+		var partner: String = requires[0] if requires[1] == id else requires[1]
+		var partner_owned := int(levels[partner]) > 0
+		if partner_owned and int(levels[id]) <= 0:
+			return {"evolution": evolution, "partner": partner, "ready": true}
+		if not partner_owned and waiting.is_empty() and _is_perk_unlocked(partner):
+			waiting = {"evolution": evolution, "partner": partner, "ready": false}
+	return waiting
+
+
+func _synergy_mult(id: String, tags: Dictionary) -> float:
+	if Perks.is_evolution(id):
+		return EVOLUTION_RETURN_MULT
+	var matched := 0
+	for tag in Perks.tags_of(id):
+		matched += int(tags.get(tag, 0))
+	var mult := 1.0 + SYNERGY_PER_LEVEL * mini(matched, SYNERGY_LEVEL_CAP)
+	if bool(evolution_hint(id).get("ready", false)):
+		mult *= SYNERGY_PARTNER_MULT
+	return mult
+
+
+func _roll_choices(keep: Array[String] = []) -> Array[String]:
 	var count := maxi(3 + int(stat("extra_choices")), 2)
 	# Brand-new players always see the showiest picks first.
 	if _tutorial_offer and stage == 0:
 		return ["split", "bomb", "more_balls"] as Array[String]
-	var picked: Array[String] = []
+	var picked: Array[String] = keep.duplicate()
 	# A newly reachable evolution is always offered once, so builds pay off visibly.
-	for id in Perks.ids():
-		if Perks.is_evolution(id) and _is_perk_available(id) and not _offered_evolutions.has(id):
-			_offered_evolutions[id] = true
-			picked.append(id)
-			break
+	if picked.is_empty():
+		for id in Perks.ids():
+			if Perks.is_evolution(id) and _is_perk_available(id) and not _offered_evolutions.has(id):
+				_offered_evolutions[id] = true
+				picked.append(id)
+				break
 	var pool: Array[String] = []
 	for id in Perks.ids():
 		if _is_perk_available(id) and not picked.has(id):
 			pool.append(id)
+	var tags := tag_levels()
 	while picked.size() < count and not pool.is_empty():
-		var id := _weighted_pick(pool)
+		# The last card ignores the build, so changing direction always stays possible.
+		var id := _weighted_pick(pool, {} if picked.size() == count - 1 else tags)
 		picked.append(id)
 		pool.erase(id)
 	return picked
 
 
-func _weighted_pick(pool: Array[String]) -> String:
+## `tags` empty means plain rarity odds, without any leaning toward the current build.
+func _weighted_pick(pool: Array[String], tags := {}) -> String:
 	var luck := stat("luck")
 	var total := 0.0
 	var weights: Array[float] = []
 	for id in pool:
 		var rarity: int = Perks.PERKS[id]["rarity"]
 		var weight: float = Perks.RARITY_WEIGHTS[rarity] * (1.0 + luck * rarity)
+		if not tags.is_empty():
+			weight *= _synergy_mult(id, tags)
 		weights.append(weight)
 		total += weight
 	var roll := _rng.randf() * total

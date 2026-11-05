@@ -727,6 +727,8 @@ func _consume_events() -> void:
 				_spawn_particles(e["pos"], UI.BLOCKS["regen"], 3, 90.0)
 			"breed":
 				_spawn_particles(e["pos"], UI.BLOCKS["breeder"], 8, 180.0)
+			"plague":
+				_spawn_particles(e["pos"], Color("2f9e44"), 6, 200.0)
 			"extra_ball":
 				_show_banner("+1", 0.5)
 			"guard":
@@ -1184,6 +1186,7 @@ func _draw_game_ui() -> void:
 	if paused:
 		fill_screen(Color(UI.INK, 0.82))
 		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
+		_draw_build(935.0, 6)
 
 
 ## A comic-style bubble under the boss, kept on screen wherever the boss has moved to.
@@ -1498,12 +1501,84 @@ func _draw_upgrade_screen() -> void:
 		var level: int = sim.levels[id]
 		if level > 0:
 			text_right(rect.position + Vector2(rect.size.x - 28.0, 30.0), t("level") % level, 19, Color(UI.MUTED, ease_in), font_body)
+		var hint := _card_hint(id)
+		var has_hint := String(hint["text"]) != ""
 		var name_text := t("perk_" + id)
-		text_center(rect.position + Vector2(rect.size.x / 2.0, rect.size.y * 0.38), name_text, fit_size(name_text, 42, rect.size.x - 60.0), Color(color, ease_in))
+		text_center(rect.position + Vector2(rect.size.x / 2.0, rect.size.y * (0.3 if has_hint else 0.38)), name_text, fit_size(name_text, 42, rect.size.x - 60.0), Color(color, ease_in))
 		var lines := t("perk_%s_desc" % id).split("\n")
-		var line_y := rect.size.y * (0.64 if lines.size() > 1 else 0.7)
+		var line_y := rect.size.y * ((0.5 if lines.size() > 1 else 0.56) if has_hint else (0.64 if lines.size() > 1 else 0.7))
 		for l in lines.size():
 			text_center(rect.position + Vector2(rect.size.x / 2.0, line_y + l * 34.0), lines[l], fit_size(lines[l], 25, rect.size.x - 60.0), Color(UI.MUTED, ease_in), font_body)
+		if has_hint:
+			var hint_text := String(hint["text"])
+			var hint_color: Color = hint["color"]
+			text_center(rect.position + Vector2(rect.size.x / 2.0, rect.size.y - 27.0), hint_text, fit_size(hint_text, 24, rect.size.x - 50.0), Color(hint_color, ease_in))
+
+
+## The one line that tells a card's place in the build: what it evolves from or into,
+## or which part of the current build it feeds.
+func _card_hint(id: String) -> Dictionary:
+	if Perks.is_evolution(id):
+		var parents: Array = Perks.PERKS[id]["requires"]
+		return {"text": t("evolve_recipe") % [t("perk_" + String(parents[0])), t("perk_" + String(parents[1]))], "color": UI.GOLD}
+	var path := sim.evolution_hint(id)
+	if bool(path.get("ready", false)):
+		return {"text": t("hint_evolve_ready") % t("perk_" + String(path["evolution"])), "color": UI.GOLD}
+	var owned := sim.tag_levels()
+	for tag in Perks.tags_of(id):
+		if int(owned.get(tag, 0)) > 0:
+			return {"text": t("hint_synergy") % t("tag_" + tag), "color": UI.MINT}
+	if not path.is_empty():
+		return {"text": t("hint_evolve_partner") % [t("perk_" + String(path["partner"])), t("perk_" + String(path["evolution"]))], "color": UI.STAR}
+	return {"text": "", "color": UI.MUTED}
+
+
+## The run's build: its strongest leanings on one line, then every owned perk as a chip.
+func _draw_build(top: float, max_rows: int) -> void:
+	var left := 60.0
+	var right := BASE_W - 60.0
+	var totals := sim.tag_levels()
+	var tags: Array = totals.keys()
+	tags.sort_custom(func(a: String, b: String) -> bool: return int(totals[a]) > int(totals[b]))
+	var summary: Array[String] = []
+	for tag: String in tags.slice(0, 3):
+		summary.append("%s ×%d" % [t("tag_" + tag), int(totals[tag])])
+	text_left(Vector2(left, top), t("build_title"), 20, UI.MUTED, font_label)
+	text_right(Vector2(right, top), "   ".join(summary), 22, UI.MINT)
+	var owned: Array[String] = []
+	for id in Perks.ids():
+		if int(sim.levels[id]) > 0:
+			owned.append(id)
+	if owned.is_empty():
+		text_center(Vector2(BASE_W / 2.0, top + 44.0), t("build_empty"), 22, UI.MUTED, font_body)
+		return
+	# Evolutions lead, since they are the payoff of the whole build.
+	owned.sort_custom(func(a: String, b: String) -> bool:
+		var a_evo := Perks.is_evolution(a)
+		if a_evo != Perks.is_evolution(b):
+			return a_evo
+		return int(sim.levels[a]) > int(sim.levels[b]))
+	const CHIP_H := 38.0
+	const CHIP_GAP := 8.0
+	const CHIP_SIZE := 21
+	var x := left
+	var y := top + 24.0
+	var row_index := 0
+	for id in owned:
+		var level: int = sim.levels[id]
+		var label := t("perk_" + id) if level <= 1 else "%s %d" % [t("perk_" + id), level]
+		var width: float = minf(font_body.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, CHIP_SIZE).x + 26.0, right - left)
+		if x + width > right:
+			x = left
+			y += CHIP_H + CHIP_GAP
+			row_index += 1
+			if row_index >= max_rows:
+				return
+		var chip := Rect2(x, y, width, CHIP_H)
+		var color: Color = UI.RARITY[int(Perks.PERKS[id]["rarity"])]
+		panel(chip, Color(color, 0.14), CHIP_H / 2.0, Color(color, 0.8 if Perks.is_evolution(id) else 0.4), 2)
+		text_center(chip.get_center(), label, fit_size(label, CHIP_SIZE, width - 20.0), color, font_body)
+		x += width + CHIP_GAP
 
 
 func card_rect(index: int, count: int) -> Rect2:
@@ -1536,8 +1611,9 @@ func _draw_end_screen(title: String, color: Color) -> void:
 	]
 	for i in rows.size():
 		row(Vector2(105.0, 553.0 + i * 58.0), 510.0, t(rows[i][0]), rows[i][1], 29, UI.TEXT)
+	_draw_build(848.0, 3)
 	var alpha := 0.6 + sin(time * 4.5) * 0.4
-	text_center(Vector2(BASE_W / 2.0, 950.0), t("tap_retry"), 44, Color(UI.TEXT, alpha))
+	text_center(Vector2(BASE_W / 2.0, 1036.0), t("tap_retry"), 40, Color(UI.TEXT, alpha))
 
 
 ## Largest size up to `size` at which the text fits, so no language can overflow a box.

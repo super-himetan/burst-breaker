@@ -6,7 +6,8 @@
 
 ## やり込み要素
 
-- 強化56種（進化8種を含む）と、実績による段階的な解放
+- 強化60種（進化12種を含む）と、実績による段階的な解放
+- 9系統のビルド：持っている系統の強化が出やすくなり、カードに進化への道筋が出る
 - 玉8種、特殊ブロック7種、個性の違うボス6体（登場演出とセリフつき）
 - コインで買える永続強化のショップ
 - 上限のない難易度と、転生による星の倍率
@@ -51,7 +52,7 @@ mkdir -p build/ios && touch build/.gdignore && /Applications/Godot.app/Contents/
 /Applications/Godot.app/Contents/MacOS/Godot --path . --always-on-top -- --verify="$PWD/verify-output"
 ```
 
-ボットで長期プレイを模擬します。`perks` と `balls` で強化と玉の強さも比較できます。
+ボットで長期プレイを模擬します。`perks` `balls` `bosses` `builds` で強化、玉、ボス、ビルド系統の強さも比較できます。
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . -s tests/balance.gd -- campaign 100 1

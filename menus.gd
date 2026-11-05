@@ -446,9 +446,12 @@ func _draw_codex_perk(id: String, y: float) -> void:
 			host.text_left(Vector2(70.0, y + 76.0), hint, host.fit_size(hint, 22, 580.0), Color(UI.MUTED, 0.8), host.font_body)
 		return
 	var name_text := t("perk_" + id)
-	host.text_left(Vector2(70.0, y + 36.0), name_text, host.fit_size(name_text, 28, 400.0), color)
-	var kind: String = t("evolution") if Perks.is_evolution(id) else t("rarity_%d" % rarity)
-	host.text_right(Vector2(650.0, y + 36.0), kind, 20, UI.MUTED, host.font_label)
+	host.text_left(Vector2(70.0, y + 36.0), name_text, host.fit_size(name_text, 28, 250.0), color)
+	var kind: String = t("rarity_%d" % rarity)
+	if Perks.is_evolution(id):
+		var parents: Array = Perks.PERKS[id]["requires"]
+		kind = t("evolve_recipe") % [t("perk_" + String(parents[0])), t("perk_" + String(parents[1]))]
+	host.text_right(Vector2(650.0, y + 36.0), kind, host.fit_size(kind, 20, 310.0), UI.MUTED, host.font_body)
 	var desc := t("perk_%s_desc" % id).replace("\n", " ")
 	host.text_left(Vector2(70.0, y + 76.0), desc, host.fit_size(desc, 23, 580.0), UI.TEXT, host.font_body)
 

@@ -31,6 +31,10 @@ func _init() -> void:
 	_test_every_perk_changes_something()
 	_test_perk_mechanics()
 	_test_evolution_needs_both_parents()
+	_test_build_data_is_complete()
+	_test_offers_follow_the_build()
+	_test_perks_that_would_do_nothing_are_not_offered()
+	_test_new_evolutions()
 	_test_locked_perks_stay_out_of_offers()
 	_test_max_level_perks_stop_appearing()
 	_test_reroll()
@@ -310,7 +314,7 @@ func _test_perk_mechanics() -> void:
 	_give(sim, "power", 3)
 	var block := _single_block(sim, Vector2i(3, 2), 1000)
 	sim._hit_block_with_ball(Vector2i(3, 2), block, _ball())
-	_check(sim.total_damage == 4, "power adds flat damage")
+	_check(sim.total_damage == 7, "power adds flat damage")
 
 	sim = _sim()
 	_give(sim, "first_strike", 1)
@@ -452,6 +456,131 @@ func _test_evolution_needs_both_parents() -> void:
 	_check(sim._is_perk_available("e_cluster"), "both parents make it available")
 	var first := sim._roll_choices()
 	_check(first.has("e_cluster"), "a newly reachable evolution is offered straight away")
+	sim.state = GameSim.State.UPGRADE
+	sim.rerolls = 5
+	sim.choices = first
+	var kept := true
+	for i in 5:
+		sim.reroll_choices()
+		kept = kept and sim.choices.has("e_cluster") and sim.choices.size() == 3
+	_check(kept, "a reroll keeps the evolution on the table")
+
+
+func _test_build_data_is_complete() -> void:
+	for id in Perks.ids():
+		for tag in Perks.tags_of(id):
+			_check(Perks.TAGS.has(tag), "perk %s has a known tag (%s)" % [id, tag])
+		_check(not Perks.tags_of(id).is_empty(), "perk %s belongs to a build" % id)
+		if Perks.is_evolution(id):
+			for parent: String in Perks.PERKS[id]["requires"]:
+				_check(Perks.PERKS.has(parent) and not Perks.is_evolution(parent), "evolution %s comes from a normal perk (%s)" % [id, parent])
+	for ball in Balls.ids():
+		for tag: String in Balls.BALLS[ball]["tags"]:
+			_check(Perks.TAGS.has(tag), "ball %s has a known tag (%s)" % [ball, tag])
+	for lang: String in I18n.LANGS:
+		for tag in Perks.TAGS:
+			_check(I18n.text(lang, "tag_" + tag) != "tag_" + tag, "tag %s has text in %s" % [tag, lang])
+	# Every build needs somewhere to go, or leaning into it never pays off.
+	for tag in Perks.TAGS:
+		var reaches_evolution := false
+		for id in Perks.ids():
+			if Perks.is_evolution(id) and Perks.tags_of(id).has(tag):
+				reaches_evolution = true
+		_check(reaches_evolution, "build %s can reach an evolution" % tag)
+
+
+func _offer_rate(sim: GameSim, perk: String, slots_only := false) -> float:
+	var hits := 0
+	var rolls := 800
+	for i in rolls:
+		sim._offered_evolutions = {}
+		var offer := sim._roll_choices()
+		if slots_only:
+			offer = offer.slice(0, 2)
+		hits += 1 if offer.has(perk) else 0
+	return float(hits) / rolls
+
+
+func _test_offers_follow_the_build() -> void:
+	var plain := _sim(11)
+	var base_rate := _offer_rate(plain, "bomb_power")
+	var leaning := _sim(11)
+	leaning.levels["bomb"] = 3
+	leaning._recompute_stats()
+	_check(_offer_rate(leaning, "bomb_power") > base_rate * 1.5, "owning a build makes its perks show up more")
+
+	var ball := _sim(11, {"ball_type": "blaster"})
+	_check(_offer_rate(ball, "bomb_power") > base_rate, "a ball leans offers toward its build")
+
+	var partner := _sim(11)
+	partner.levels["split"] = 1
+	partner._recompute_stats()
+	var partner_rate := _offer_rate(partner, "bomb")
+	_check(partner_rate > base_rate * 1.5, "the perk that completes an evolution shows up more")
+	_check(bool(partner.evolution_hint("bomb")["ready"]), "the hint says the partner completes the evolution")
+	_check(partner.evolution_hint("bomb")["evolution"] == "e_cluster", "the hint names the evolution")
+	_check(not plain.evolution_hint("split").is_empty() and not bool(plain.evolution_hint("split")["ready"]), "a fresh perk still points at its partner")
+	_check(partner.evolution_hint("e_cluster").is_empty(), "an evolution has no further hint")
+
+	# The last card ignores the build, so a run can always change direction.
+	var deep := _sim(11)
+	deep.levels["bomb"] = 5
+	deep.levels["bomb_power"] = 5
+	deep._recompute_stats()
+	var off_build := 0
+	for i in 300:
+		deep._offered_evolutions = {}
+		var offer := deep._roll_choices()
+		if not Perks.tags_of(offer[offer.size() - 1]).has("blast"):
+			off_build += 1
+	_check(off_build > 150, "the last card usually leaves the build (%d/300)" % off_build)
+
+
+func _test_perks_that_would_do_nothing_are_not_offered() -> void:
+	for pair: Array in [["split_power", "split"], ["double_split", "split"], ["crit_power", "crit"], ["poison_power", "poison"]]:
+		var sim := _sim()
+		_check(not sim._is_perk_available(pair[0]), "%s waits for %s" % pair)
+		_give(sim, pair[1])
+		_check(sim._is_perk_available(pair[0]), "%s opens once %s is owned" % pair)
+	var splitter := _sim(1, {"ball_type": "splitter"})
+	_check(splitter._is_perk_available("split_power"), "a ball's own stats count as well")
+
+
+func _test_new_evolutions() -> void:
+	var sim := _sim()
+	_give(sim, "e_plague", 1)
+	var dying := _single_block(sim, Vector2i(3, 2), 1)
+	var neighbour := _block(sim, Vector2i(4, 2), 1000)
+	var far := _block(sim, Vector2i(6, 2), 1000)
+	dying["poison"] = 10
+	sim._damage_block(Vector2i(3, 2), 5.0)
+	_check(int(neighbour["poison"]) == 5, "plague passes half the poison to a neighbour")
+	_check(int(far["poison"]) == 0, "plague only reaches neighbours")
+
+	sim = _sim()
+	_give(sim, "e_lance", 1)
+	var ball := GameSim.Ball.new()
+	ball.hits = 3
+	sim._on_wall(ball, false)
+	_check(ball.hits == 0, "lance restores the first strike on a wall bounce")
+
+	sim = _sim()
+	_give(sim, "e_echo", 1)
+	_give(sim, "ricochet", 2)
+	sim.stats["rebound_chance"] = 1.0
+	ball = GameSim.Ball.new()
+	ball.vel = Vector2.DOWN * 100.0
+	_check(sim._try_rebound(ball) and ball.wall_bonus > 0.0, "echo makes a floor rebound count as a wall")
+
+	sim = _sim()
+	var block := _single_block(sim, Vector2i(3, 0), 1000)
+	var plain_damage := sim._scale_damage(10.0, block)
+	_give(sim, "e_fortress", 1)
+	var far_damage := sim._scale_damage(10.0, block)
+	_check(far_damage > plain_damage, "fortress pays for a distant front line")
+	sim.blocks.erase(Vector2i(3, 0))
+	block = _single_block(sim, Vector2i(3, GameSim.DEATH_ROW - 1), 1000)
+	_check(is_equal_approx(sim._scale_damage(10.0, block), plain_damage), "fortress pays nothing at the line")
 
 
 func _test_locked_perks_stay_out_of_offers() -> void:

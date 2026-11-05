@@ -2,6 +2,7 @@ extends SceneTree
 ## Plays long campaigns with a simple bot to expose pacing and balance problems.
 ## Run: godot --headless --path . -s tests/balance.gd -- campaign 120 1
 ## Modes: campaign <runs> <seed> | perks <runs> <seed> | balls <runs> <seed> | bosses <runs> <seed>
+##        builds <runs> <seed>
 
 const GameSim := preload("res://sim/game_sim.gd")
 const SaveData := preload("res://save_data.gd")
@@ -36,11 +37,14 @@ func _init() -> void:
 			_ball_table(runs, seed_value)
 		"bosses":
 			_boss_table(runs, seed_value)
+		"builds":
+			_build_table(runs, seed_value)
 	quit()
 
 
-## Plays one run. `given` starts owned at level 2 (or its max); other picks are random.
-func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
+## Plays one run. `given` starts owned at level 2 (or its max); other picks are random,
+## unless `build` names a tag to chase.
+func _play(config: Dictionary, seed_value: int, given := "", build := "") -> Dictionary:
 	var sim := GameSim.new()
 	var run_config := config.duplicate()
 	run_config["emit_events"] = false
@@ -76,8 +80,7 @@ func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 				picks += 1
 				for id in sim.choices:
 					seen[id] = true
-				var pick: String = sim.choices[rng.randi_range(0, sim.choices.size() - 1)]
-				sim.choose_upgrade(pick)
+				sim.choose_upgrade(_pick(sim, rng, build))
 			_:
 				break
 	return {
@@ -96,6 +99,21 @@ func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 		"first_burst_stage": first_burst_stage,
 		"boss_turns": boss_turns,
 	}
+
+
+## With a build to chase: evolutions first, then perks of that build, otherwise at random.
+func _pick(sim: GameSim, rng: RandomNumberGenerator, build: String) -> String:
+	if build != "":
+		for id in sim.choices:
+			if Perks.is_evolution(id):
+				return id
+		var fits: Array[String] = []
+		for id in sim.choices:
+			if Perks.tags_of(id).has(build):
+				fits.append(id)
+		if not fits.is_empty():
+			return fits[rng.randi_range(0, fits.size() - 1)]
+	return sim.choices[rng.randi_range(0, sim.choices.size() - 1)]
 
 
 ## Usually looks for a gap to shoot through, like a person would; otherwise takes the
@@ -271,12 +289,51 @@ func _boss_table(runs: int, seed_value: int) -> void:
 			for i in runs:
 				var config: Dictionary = (saves[save_name] as Dictionary).duplicate()
 				config["boss_force"] = id
+				config["boss_force_own_pool"] = true
 				var r := _play(config, seed_value * 6101 + i)
 				if int(r["stage"]) >= boss_stage:
 					reached += 1
 					turns += int((r["boss_turns"] as Dictionary).get(boss_stage, 0))
 					passed += 1 if int(r["counters"].get("boss_" + id, 0)) > 0 else 0
 			print("%-9s stage %d %-5s reached %3d/%3d  beat %3d%%  boss_turns %.1f" % [id, boss_stage, save_name, reached, runs, 100 * passed / maxi(reached, 1), float(turns) / maxi(reached, 1)])
+
+
+## Chases each build in turn, to show whether more than one way to play can win.
+func _build_table(runs: int, seed_value: int) -> void:
+	var rows: Array = [""]
+	rows.append_array(Perks.TAGS)
+	var saves := {"fresh": {"tier": 0, "stars": 0, "shop": {}, "unlocked_perks": _starting_perks()}, "mid": _fixed_config()}
+	for index in rows.size():
+		if index % _shards != _shard:
+			continue
+		var build: String = rows[index]
+		for save_name: String in saves:
+			var wins := 0
+			var stage := 0
+			var evolutions := 0
+			var with_evolution := 0
+			var combo := 0
+			var seconds := 0.0
+			for i in runs:
+				var r := _play(saves[save_name], seed_value * 3571 + i, "", build)
+				wins += 1 if r["won"] else 0
+				stage += int(r["stage"])
+				evolutions += int(r["counters"]["evolutions"])
+				with_evolution += 1 if int(r["counters"]["evolutions"]) > 0 else 0
+				combo += int(r["combo"])
+				seconds += float(r["seconds"])
+			print("%-8s %-5s win %3d%%  stage %.1f  evolved %3d%% of runs  evolutions %.2f  combo %4d  run %3ds" % [
+				build if build != "" else "(random)", save_name, 100 * wins / runs, float(stage) / runs,
+				100 * with_evolution / runs, float(evolutions) / runs, combo / runs, int(seconds / runs),
+			])
+
+
+func _starting_perks() -> Array[String]:
+	var list: Array[String] = []
+	for id in Perks.ids():
+		if not Perks.starts_locked(id):
+			list.append(id)
+	return list
 
 
 func _ball_table(runs: int, seed_value: int) -> void:
