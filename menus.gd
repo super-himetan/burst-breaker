@@ -28,7 +28,8 @@ const CODEX_ROW_H := 110.0
 const BLOCK_KINDS: Array[String] = ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]
 const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses"]
 const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
-const HOWTO_STEPS := 6
+const HOWTO_GLYPHS: Array[String] = ["crosshair", "bolt", "flag", "", "coin"]
+const TITLE_GLYPHS := {"shop": "coin", "achievements": "crown", "codex": "cards", "prestige": "star", "howto": "target", "settings": "gear"}
 const BUY_ALL_STEP := 0.07
 const MILESTONE_HOLD := 0.55
 const MILESTONE_SECONDS := 1.3
@@ -132,11 +133,11 @@ func buttons(screen: int) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 	match screen:
 		Screen.TITLE:
-			list.append(_button("start", Rect2(90.0, 560.0, 540.0, 130.0), t("start"), "primary"))
+			list.append(_button("start", Rect2(70.0, 570.0, 580.0, 140.0), t("start"), "primary"))
 			var grid: Array[String] = ["shop", "achievements", "codex", "prestige", "howto", "settings"]
 			for i in grid.size():
-				var rect := Rect2(90.0 + (i % 2) * 280.0, 712.0 + (i / 2) * 106.0, 260.0, 92.0)
-				list.append(_button(grid[i], rect, t(grid[i])))
+				var rect := Rect2(70.0 + (i % 3) * 200.0, 750.0 + (i / 3) * 170.0, 180.0, 150.0)
+				list.append(_button(grid[i], rect, t(grid[i]), "tile"))
 		Screen.HOWTO:
 			list.append(_button("back", Rect2(160.0, 1090.0, 400.0, 96.0), t("back")))
 		Screen.SETTINGS:
@@ -296,10 +297,8 @@ func draw(screen: int) -> void:
 		Screen.LOADOUT:
 			_draw_loadout()
 		Screen.SHOP:
-			_heading(t("shop"), 58.0)
-			_wallet_line(128.0)
-			var power := t("power_rating") % num(save.power_rating())
-			host.text_center(Vector2(BASE_W / 2.0, 178.0), power, 26, UI.MINT)
+			_heading(t("shop"), 66.0)
+			_wallet_line(150.0)
 			_draw_milestone()
 		Screen.STARS:
 			_heading(t("stars_tree"), 66.0)
@@ -354,6 +353,10 @@ func draw_buttons(list: Array[Dictionary], time: float) -> void:
 				host.soft_glow(rect.get_center(), rect.size * Vector2(1.5, 2.8), Color(color, 0.45 + beat * 0.35))
 				host.panel(rect.grow(beat * 4.0), color, radius + beat * 4.0, Color.WHITE, 3)
 				host.text_center(rect.get_center(), label, host.fit_size(label, 44, rect.size.x - 50.0), UI.INK)
+			"tile":
+				host.panel(rect, UI.PANEL, 28.0, UI.LINE, 2)
+				PerkArt.draw_glyph(host.canvas, TITLE_GLYPHS[button["id"]], rect.get_center() + Vector2(0.0, -22.0), 32.0, UI.TEXT)
+				host.text_center(rect.get_center() + Vector2(0.0, 44.0), label, host.fit_size(label, 24, rect.size.x - 24.0), UI.MUTED, host.font_body)
 			"selected":
 				host.panel(rect, UI.TEXT, radius)
 				host.text_center(rect.get_center(), label, host.fit_size(label, 32, rect.size.x - 40.0), UI.INK)
@@ -363,7 +366,7 @@ func draw_buttons(list: Array[Dictionary], time: float) -> void:
 			_:
 				host.panel(rect, UI.PANEL, radius, UI.LINE, 2)
 				host.text_center(rect.get_center(), label, host.fit_size(label, 30, rect.size.x - 40.0), UI.TEXT)
-		var dot := rect.position + Vector2(rect.size.x - radius * 0.55, radius * 0.45)
+		var dot := rect.position + Vector2(rect.size.x - minf(radius * 0.55, 26.0), minf(radius * 0.45, 24.0))
 		if button["id"] == "shop" and _any_purchase_available():
 			host.soft_glow(dot, Vector2(44.0, 44.0), Color(UI.ACCENT, 0.7))
 			host.canvas.draw_circle(dot, 8.0, UI.ACCENT)
@@ -422,7 +425,8 @@ func _draw_star_tree() -> void:
 		host.text_left(Vector2(rect.position.x + 36.0, y + 40.0), title, host.fit_size(title, 30, name_width), title_color)
 		var desc: String = t("star_%s_desc" % id) if opened else t("star_locked") % t("star_" + String(node["requires"]))
 		host.text_left(Vector2(rect.position.x + 36.0, y + 82.0), desc, host.fit_size(desc, 23, name_width), UI.MUTED, host.font_body)
-		host.text_center(Vector2(586.0, y + 36.0), "%d / %d" % [level, int(node["max"])], 22, UI.MUTED, host.font_body)
+		for pip in int(node["max"]):
+			host.canvas.draw_circle(Vector2(558.0 + pip * 16.0 - (int(node["max"]) - 1) * 8.0 + 28.0, y + 36.0), 5.0, Color(color, 1.0 if pip < level else 0.25))
 		var maxed := level >= int(node["max"])
 		var price: String = t("max_level") if maxed else t("star_cost") % int(node["cost"])
 		var price_color: Color = UI.MINT if maxed else (UI.STAR if can_raise else Color(UI.STAR, 0.4))
@@ -454,31 +458,29 @@ func _draw_title() -> void:
 	var line_2 := t("title_line_2")
 	var pulse := 0.5 + sin(time * 1.6) * 0.5
 	var glow_color: Color = UI.ramp(fmod(time * 0.06, 1.0))
-	host.soft_glow(Vector2(BASE_W / 2.0, 150.0), Vector2(860.0, 420.0), Color(glow_color, 0.2 + pulse * 0.1))
-	host.text_center(Vector2(BASE_W / 2.0, 95.0), line_1, host.fit_size(line_1, 104, 640.0), UI.TEXT)
-	host.text_center(Vector2(BASE_W / 2.0, 205.0), line_2, host.fit_size(line_2, 104, 640.0), glow_color.lerp(UI.TEXT, 0.25))
-	host.text_center(Vector2(BASE_W / 2.0, 295.0), t("tagline"), host.fit_size(t("tagline"), 28, 620.0), UI.MUTED, host.font_body)
-	_wallet_line(355.0)
-	host.panel(Rect2(90.0, 395.0, 540.0, 145.0), UI.PANEL, 28.0, UI.LINE, 2)
-	var rows := [
-		["rec_damage", num(save.best_damage)],
-		["rec_combo", num(save.stat_value("best_combo"))],
-		["rec_tier", str(save.max_tier())],
-	]
-	for i in rows.size():
-		host.row(Vector2(122.0, 428.0 + i * 40.0), 476.0, t(rows[i][0]), rows[i][1], 25, UI.TEXT)
+	host.soft_glow(Vector2(BASE_W / 2.0, 260.0), Vector2(860.0, 460.0), Color(glow_color, 0.2 + pulse * 0.1))
+	host.text_center(Vector2(BASE_W / 2.0, 190.0), line_1, host.fit_size(line_1, 110, 640.0), UI.TEXT)
+	host.text_center(Vector2(BASE_W / 2.0, 310.0), line_2, host.fit_size(line_2, 110, 640.0), glow_color.lerp(UI.TEXT, 0.25))
+	_wallet_line(440.0)
+	if int(save.best_damage) > 0:
+		var best := "BEST  " + num(save.best_damage)
+		host.text_center(Vector2(BASE_W / 2.0, 492.0), best, 24, UI.MUTED, host.font_label)
 
 
 func _draw_howto() -> void:
 	_heading(t("howto"), 130.0)
-	for i in HOWTO_STEPS:
-		var y := 220.0 + i * 140.0
-		host.panel(Rect2(50.0, y, 620.0, 124.0), UI.PANEL, 28.0, UI.LINE, 2)
-		var color: Color = UI.RAMP[i % UI.RAMP.size()]
-		host.canvas.draw_circle(Vector2(112.0, y + 62.0), 34.0, color)
-		host.text_center(Vector2(112.0, y + 64.0), str(i + 1), 34, UI.INK)
+	for i in HOWTO_GLYPHS.size():
+		var y := 260.0 + i * 150.0
+		host.panel(Rect2(50.0, y, 620.0, 130.0), UI.PANEL, 28.0, UI.LINE, 2)
+		var center := Vector2(120.0, y + 65.0)
+		if HOWTO_GLYPHS[i] == "":
+			# Toughness is shown by the colours themselves.
+			for k in 3:
+				host.panel(Rect2(center + Vector2(-42.0 + k * 29.0, -18.0), Vector2(26.0, 36.0)), UI.ramp(1.0 - k * 0.5), 8.0)
+		else:
+			PerkArt.draw_glyph(host.canvas, HOWTO_GLYPHS[i], center, 36.0, UI.RAMP[i])
 		var line := t("howto_%d" % (i + 1))
-		host.text_left(Vector2(170.0, y + 62.0), line, host.fit_size(line, 30, 480.0), UI.TEXT)
+		host.text_left(Vector2(190.0, y + 65.0), line, host.fit_size(line, 34, 460.0), UI.TEXT)
 
 
 func _draw_loadout() -> void:
@@ -517,12 +519,12 @@ func _draw_mastery(y: float) -> void:
 	var ball: String = save.ball_type
 	var level: int = save.mastery_level(ball)
 	var line: String = t("mastery_line") % [level, t("ball_%s_mastery" % ball)]
-	host.text_left(Vector2(50.0, y), line, host.fit_size(line, 22, 470.0), UI.MINT, host.font_body)
-	var bar := Rect2(530.0, y - 6.0, 140.0, 12.0)
+	host.text_left(Vector2(50.0, y), line, host.fit_size(line, 22, 400.0), UI.MINT, host.font_body)
+	var bar := Rect2(470.0, y - 4.0, 200.0, 8.0)
 	var progress: float = save.mastery_progress(ball)
 	host.panel(bar, Color(1.0, 1.0, 1.0, 0.08), 6.0)
 	if progress > 0.0:
-		host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 12.0), bar.size.y)), UI.MINT, 6.0)
+		host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 8.0), bar.size.y)), UI.MINT, 4.0)
 
 
 func _scale_text(value: float) -> String:
@@ -535,26 +537,47 @@ func _draw_shop() -> void:
 		var y := LIST_TOP + i * (SHOP_ROW_H + ROW_GAP) - scroll
 		if y > LIST_BOTTOM or y + SHOP_ROW_H < LIST_TOP:
 			continue
-		var id := ids[i]
-		var level: int = save.shop_level(id)
-		var maxed: bool = level >= int(Shop.ITEMS[id]["max"])
-		var buyable: bool = save.can_buy(id)
-		var rect := Rect2(40.0, y, 640.0, SHOP_ROW_H)
-		host.panel(rect, UI.PANEL, 26.0, Color(UI.GOLD, 0.55) if buyable else UI.LINE, 2)
-		if _row_flash.has(id):
-			host.panel(rect, Color(UI.GOLD, 0.35 * float(_row_flash[id]) / ROW_FLASH_SECONDS), 26.0)
-		var title := t("shop_" + id)
-		host.text_left(Vector2(70.0, y + 30.0), title, host.fit_size(title, 28, 390.0), UI.TEXT)
-		var desc := t("shop_%s_desc" % id)
-		host.text_left(Vector2(70.0, y + 64.0), desc, host.fit_size(desc, 22, 390.0), UI.MUTED, host.font_body)
-		var next := Shop.next_milestone(id, level)
-		if next > 0:
-			var milestone := t("milestone_line") % [next, t("shop_%s_bonus" % id)]
-			host.text_left(Vector2(70.0, y + 94.0), milestone, host.fit_size(milestone, 21, 390.0), UI.GOLD, host.font_body)
-		host.text_center(Vector2(570.0, y + 36.0), t("level") % level, 22, UI.MUTED, host.font_body)
-		var price: String = t("max_level") if maxed else num(save.shop_cost(id))
-		var price_color: Color = UI.MINT if maxed else (UI.GOLD if buyable else Color(UI.GOLD, 0.45))
-		host.text_center(Vector2(570.0, y + 78.0), price, 34, price_color)
+		_draw_shop_row(ids[i], y)
+
+
+func _draw_shop_row(id: String, y: float) -> void:
+	var level: int = save.shop_level(id)
+	var item: Dictionary = Shop.ITEMS[id]
+	var maxed: bool = level >= int(item["max"])
+	var buyable: bool = save.can_buy(id)
+	var rect := Rect2(40.0, y, 640.0, SHOP_ROW_H)
+	host.panel(rect, UI.PANEL, 26.0, Color(UI.GOLD, 0.55) if buyable else UI.LINE, 2)
+	if _row_flash.has(id):
+		host.panel(rect, Color(UI.GOLD, 0.35 * float(_row_flash[id]) / ROW_FLASH_SECONDS), 26.0)
+	PerkArt.draw_glyph(host.canvas, Shop.GLYPHS[id], Vector2(92.0, y + SHOP_ROW_H / 2.0), 30.0, UI.TEXT if buyable or maxed else UI.MUTED)
+	var title := t("shop_" + id)
+	var title_size: int = host.fit_size(title, 28, 240.0)
+	host.text_left(Vector2(142.0, y + 38.0), title, title_size, UI.TEXT)
+	var title_width: float = host.font.get_string_size(title, HORIZONTAL_ALIGNMENT_LEFT, -1, title_size).x
+	host.text_left(Vector2(154.0 + title_width, y + 40.0), t("shop_%s_desc" % id), 22, UI.MINT, host.font_body)
+	_draw_shop_goal(id, level, Vector2(142.0, y + 76.0))
+	var price: String = t("max_level") if maxed else num(save.shop_cost(id))
+	var price_color: Color = UI.MINT if maxed else (UI.GOLD if buyable else Color(UI.GOLD, 0.45))
+	host.text_right(Vector2(654.0, y + SHOP_ROW_H / 2.0), price, 34, price_color)
+
+
+## A bar toward the next milestone with what it pays, or plain pips for a small item.
+func _draw_shop_goal(id: String, level: int, start: Vector2) -> void:
+	var every: int = Shop.ITEMS[id].get("every", 0)
+	var next := Shop.next_milestone(id, level)
+	if next > 0:
+		var bar := Rect2(start, Vector2(190.0, 8.0))
+		var progress := float(level % every) / every
+		host.panel(bar, Color(1.0, 1.0, 1.0, 0.08), 4.0)
+		if progress > 0.0:
+			host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 8.0), bar.size.y)), UI.GOLD, 4.0)
+		var goal := t("milestone_line") % [next, t("shop_%s_bonus" % id)]
+		host.text_left(start + Vector2(204.0, 4.0), goal, host.fit_size(goal, 19, 150.0), UI.GOLD, host.font_body)
+		return
+	if every > 0:
+		return
+	for i in mini(int(Shop.ITEMS[id]["max"]), 12):
+		host.canvas.draw_circle(start + Vector2(6.0 + i * 18.0, 4.0), 5.0, Color(UI.GOLD if i < level else UI.MUTED, 1.0 if i < level else 0.3))
 
 
 func _draw_achievements() -> void:
@@ -570,15 +593,16 @@ func _draw_achievements() -> void:
 		var title := t("ach_" + stat)
 		if title.contains("%s"):
 			title = title % num(target)
-		host.text_left(Vector2(66.0, y + 32.0), title, host.fit_size(title, 26, 390.0), UI.MINT if done else UI.TEXT)
-		var note := t("reward") % num(int(entry["reward_coins"]))
-		host.text_right(Vector2(654.0, y + 32.0), note, host.fit_size(note, 19, 190.0), UI.GOLD, host.font_body)
+		host.text_left(Vector2(66.0, y + 36.0), title, host.fit_size(title, 26, 450.0), UI.MINT if done else UI.TEXT)
+		var reward := num(int(entry["reward_coins"]))
+		host.text_right(Vector2(654.0, y + 36.0), reward, 24, UI.GOLD)
+		var reward_width: float = host.font.get_string_size(reward, HORIZONTAL_ALIGNMENT_LEFT, -1, 24).x
+		host.canvas.draw_circle(Vector2(654.0 - reward_width - 16.0, y + 36.0), 9.0, UI.GOLD)
 		var progress := 1.0 if done else clampf(float(save.stat_value(stat)) / float(target), 0.0, 1.0)
-		var bar := Rect2(66.0, y + 63.0, 490.0, 12.0)
-		host.panel(bar, Color(1.0, 1.0, 1.0, 0.08), 6.0)
+		var bar := Rect2(66.0, y + 68.0, 588.0, 10.0)
+		host.panel(bar, Color(1.0, 1.0, 1.0, 0.08), 5.0)
 		if progress > 0.0:
-			host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 12.0), bar.size.y)), UI.MINT if done else UI.ACCENT, 6.0)
-		host.text_right(Vector2(654.0, y + 69.0), "%d%%" % int(progress * 100.0), 22, UI.MUTED, host.font_body)
+			host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 10.0), bar.size.y)), UI.MINT if done else UI.ACCENT, 5.0)
 
 
 func _codex_ids() -> Array[String]:
@@ -686,22 +710,21 @@ func _draw_codex_boss(id: String, y: float) -> void:
 
 func _draw_prestige() -> void:
 	var pulse := 0.5 + sin(float(host.time) * 1.6) * 0.5
-	host.soft_glow(Vector2(BASE_W / 2.0, 170.0), Vector2(620.0, 380.0), Color(UI.STAR, 0.14 + pulse * 0.1))
-	host.text_center(Vector2(BASE_W / 2.0, 140.0), t("prestige"), 72, UI.STAR)
-	host.text_center(Vector2(BASE_W / 2.0, 250.0), t("stars_owned") % save.stars, 36, UI.TEXT)
-	host.panel(Rect2(60.0, 310.0, 600.0, 240.0), UI.PANEL, 30.0, UI.LINE, 2)
-	host.text_center(Vector2(BASE_W / 2.0, 350.0), t("prestige_desc_1"), 28, UI.TEXT, host.font_body)
-	host.text_center(Vector2(BASE_W / 2.0, 392.0), t("prestige_desc_2"), 28, UI.TEXT, host.font_body)
-	host.text_center(Vector2(BASE_W / 2.0, 452.0), t("prestige_bonus"), host.fit_size(t("prestige_bonus"), 27, 550.0), UI.GOLD)
-	host.text_center(Vector2(BASE_W / 2.0, 504.0), t("prestige_keep"), host.fit_size(t("prestige_keep"), 25, 550.0), UI.MUTED, host.font_body)
+	var center := Vector2(BASE_W / 2.0, 250.0)
+	host.soft_glow(center, Vector2(720.0, 620.0), Color(UI.STAR, 0.16 + pulse * 0.12))
+	PerkArt.draw_glyph(host.canvas, "star", center, 96.0 + pulse * 6.0, UI.STAR)
+	host.text_center(center + Vector2(0.0, 150.0), str(save.stars), 72, UI.TEXT)
+	host.text_center(Vector2(BASE_W / 2.0, 500.0), t("prestige_desc_1"), host.fit_size(t("prestige_desc_1"), 30, 620.0), UI.TEXT, host.font_body)
+	host.text_center(Vector2(BASE_W / 2.0, 548.0), t("prestige_bonus"), host.fit_size(t("prestige_bonus"), 24, 620.0), UI.GOLD, host.font_body)
 	if confirm_prestige:
-		host.text_center(Vector2(BASE_W / 2.0, 650.0), t("prestige_confirm"), 44, UI.ACCENT)
+		host.text_center(Vector2(BASE_W / 2.0, 640.0), t("prestige_confirm"), 44, UI.ACCENT)
+		host.text_center(Vector2(BASE_W / 2.0, 690.0), t("prestige_keep"), host.fit_size(t("prestige_keep"), 24, 620.0), UI.MUTED, host.font_body)
 		return
-	var line := ""
-	if int(save.wins) <= 0:
-		line = t("prestige_locked")
-	elif not save.can_prestige():
-		line = t("prestige_more")
-	else:
-		line = t("prestige_gain") % save.stars_on_prestige()
-	host.text_center(Vector2(BASE_W / 2.0, 680.0), line, host.fit_size(line, 34, 620.0), UI.TEXT)
+	if not save.can_prestige():
+		var locked: String = t("prestige_locked") if int(save.wins) <= 0 else t("prestige_more")
+		host.text_center(Vector2(BASE_W / 2.0, 680.0), locked, host.fit_size(locked, 28, 620.0), UI.MUTED, host.font_body)
+		return
+	var gain := t("prestige_gain") % save.stars_on_prestige()
+	host.text_center(Vector2(BASE_W / 2.0, 670.0), gain, 56, UI.STAR)
+
+

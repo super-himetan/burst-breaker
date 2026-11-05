@@ -1261,16 +1261,11 @@ func _test_shop_milestones() -> void:
 func _test_buy_all_order() -> void:
 	var data := SaveData.new(_temp_save_path("buy_all"))
 	data.coins = 10000
-	var preview := data.preview_buy_all()
-	var start_power := data.power_rating()
-	var bought := 0
 	var id := data.cheapest_item()
 	while id != "":
 		data.buy(id)
-		bought += 1
 		id = data.cheapest_item()
-	_check(bought == preview["levels"] and data.power_rating() == preview["power"], "the preview matches what buying all does")
-	_check(data.power_rating() > start_power, "buying raises power")
+	_check(data.coins < 10000 and data.cheapest_item() == "", "buying all spends until nothing is affordable")
 	_check(not data.is_shop_item_open("infinity") and not data.shop_ids().has("infinity"), "the endless item stays hidden at first")
 	for item: String in Shop.ITEMS:
 		if not Shop.ITEMS[item].get("after_all", false):
@@ -1280,6 +1275,10 @@ func _test_buy_all_order() -> void:
 	_check(data.buy("infinity") and data.shop_level("infinity") == 1, "the endless item can be bought")
 	var maxed_price := Shop.cost("infinity", int(Shop.ITEMS["infinity"]["max"]) - 1)
 	_check(maxed_price > 0, "the endless item's price stays in range up to its cap")
+	var glyphs_ok := true
+	for item: String in Shop.ITEMS:
+		glyphs_ok = glyphs_ok and Shop.GLYPHS.has(item) and PerkArt.GLYPHS.has(Shop.GLYPHS[item])
+	_check(glyphs_ok, "every shop item has an icon")
 
 
 func _test_star_tree() -> void:

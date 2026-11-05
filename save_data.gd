@@ -11,9 +11,6 @@ const StarTree := preload("res://data/star_tree.gd")
 const DEFAULT_PATH := "user://save.json"
 const VOLUME_MAX := 10
 const COINS_PER_STAR_SQUARED := 6000.0
-const STAR_DAMAGE := 0.25
-const POWER_BASE := 100.0
-const POWER_BASE_BALLS := 10.0
 ## Experience for simply reaching a stage, and the extra for clearing the run.
 const WIN_XP := 8
 const MAX_TIER_XP := 10
@@ -265,37 +262,6 @@ func _cheapest_item(levels: Dictionary, wallet: int) -> String:
 
 func cheapest_item() -> String:
 	return _cheapest_item(shop, coins)
-
-
-## What spending every coin right now would do: {levels, power}.
-func preview_buy_all() -> Dictionary:
-	var levels := shop.duplicate()
-	var wallet: int = coins
-	var bought := 0
-	var id := _cheapest_item(levels, wallet)
-	while id != "":
-		wallet -= Shop.cost(id, int(levels.get(id, 0)))
-		levels[id] = int(levels.get(id, 0)) + 1
-		bought += 1
-		id = _cheapest_item(levels, wallet)
-	return {"levels": bought, "power": power_rating(levels)}
-
-
-## One number for how much stronger the saved progress makes every run.
-func power_rating(levels: Variant = null) -> int:
-	var owned: Dictionary = shop if levels == null else levels
-	var total := {}
-	for id: String in owned:
-		if Shop.ITEMS.has(id):
-			Shop.apply(total, id, int(owned[id]))
-	for id: String in star_nodes:
-		var add: Dictionary = StarTree.NODES[id]["add"]
-		for key: String in add:
-			total[key] = float(total.get(key, 0.0)) + float(add[key]) * int(star_nodes[id])
-	var damage := (1.0 + float(total.get("damage_pct", 0.0))) * float(total.get("damage_mult", 1.0)) * (1.0 + STAR_DAMAGE * stars)
-	var ball_factor := (POWER_BASE_BALLS + float(total.get("ball_count", 0.0))) / POWER_BASE_BALLS
-	var crit_factor := 1.0 + float(total.get("crit_chance", 0.0)) * (1.5 + float(total.get("crit_mult", 0.0)))
-	return int(POWER_BASE * damage * ball_factor * crit_factor)
 
 
 func star_level(id: String) -> int:

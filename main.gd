@@ -44,7 +44,10 @@ const COUNT_UP_TICK := 0.07
 const OVERKILL_TEXT_GAP := 0.12
 const CARD_ICON_MAX := 120.0
 const KIND_BORDER := 4
-const CHIP_ICON_RADIUS := 12.0
+const CARD_PATH_WIDTH := 96.0
+const BUILD_TILE := 54.0
+const BUILD_GAP := 8.0
+const STAGE_PIP_SPACING := 26.0
 ## The last target slows time, and destroying it nearly stops it.
 const TENSION_SLOW := 0.45
 const TENSION_SECONDS := 1.2
@@ -155,7 +158,6 @@ var music_pcm := PackedByteArray()
 var end_age := 0.0
 var last_tick_sound := 0.0
 var last_overkill_text := 0.0
-var end_preview := {}
 var run_mastery_before := 0
 var finish_time := 0.0
 var tension_left := TENSION_SECONDS
@@ -316,7 +318,6 @@ func t(key: String) -> String:
 
 func _set_screen(next: int) -> void:
 	screen = next
-	end_preview = save.preview_buy_all()
 	screen_age = 0.0
 	aiming = false
 	list_active = false
@@ -390,7 +391,6 @@ func _bank_run() -> void:
 	if mastery_now > run_mastery_before:
 		toasts.append({"text": t("mastery_toast") % [t("ball_" + sim.ball_type), mastery_now], "t": 0.0})
 	on_progress_changed()
-	end_preview = save.preview_buy_all()
 
 
 func _run_summary() -> Dictionary:
@@ -1008,8 +1008,7 @@ func current_buttons() -> Array[Dictionary]:
 		list.append(_button("to_title", Rect2(110.0, 810.0, 500.0, 100.0), t("to_title")))
 	elif is_run_over():
 		list.append(_button("restart", Rect2(70.0, 930.0, 580.0, 120.0), t("retry"), "primary"))
-		var can_buy: int = end_preview.get("levels", 0)
-		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop_can_buy") % can_buy if can_buy > 0 else t("shop")))
+		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop")))
 		list.append(_button("to_title", Rect2(368.0, 1066.0, 282.0, 100.0), t("to_title")))
 	elif sim.state == GameSim.State.UPGRADE:
 		if sim.rerolls > 0:
@@ -1113,7 +1112,8 @@ func _on_hit(e: Dictionary) -> void:
 	flash[e["block_id"]] = 1.0
 	var combo: int = e["combo"]
 	var is_crit: bool = e["crit"]
-	if numbers.size() < 70:
+	# Only crits get a number: a screen full of small ones reads as noise.
+	if is_crit and numbers.size() < 70:
 		numbers.append({
 			"pos": e["pos"] + Vector2(randf_range(-18.0, 18.0), -10.0),
 			"text": I18n.format_number(e["damage"]),
@@ -1537,7 +1537,7 @@ func _draw_game_ui() -> void:
 	if paused:
 		fill_screen(Color(UI.INK, 0.82))
 		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
-		_draw_build(935.0, 6)
+		_draw_build(950.0, 3)
 
 
 ## Slams in beside the field, clear of the heading and the cards when a stage just ended.
@@ -1802,7 +1802,8 @@ func _draw_launcher() -> void:
 	canvas.draw_circle(p, sim.ball_radius + 3.0, color)
 	text_center(p + Vector2(0.0, 44.0), "x%d" % sim.shot_ball_count(), 26, UI.TEXT)
 	if sim.guards > 0:
-		text_center(Vector2(120.0, 1118.0), "GUARD x%d" % sim.guards, 20, UI.MINT, font_label)
+		for i in sim.guards:
+			PerkArt.draw_glyph(canvas, "shield", Vector2(70.0 + i * 36.0, 1110.0), 14.0, UI.MINT)
 	if not aiming and not save.tutorial_done:
 		text_center(Vector2(BASE_W / 2.0, 1180.0), t("tutorial"), 36, UI.GOLD)
 		# A pointer drifts across the field, showing that you aim by pointing.
@@ -1830,16 +1831,11 @@ func _draw_aim() -> void:
 
 
 func _draw_hud() -> void:
-	text_center(Vector2(100.0, 58.0), t("hud_stage"), 18, UI.MUTED, font_label)
-	text_center(Vector2(100.0, 98.0), "%d/%d" % [sim.stage + 1, GameSim.STAGES.size()], 38, UI.TEXT)
+	_draw_stage_pips(Vector2(46.0, 72.0))
+	for i in sim.waves_left:
+		panel(Rect2(40.0 + i * 26.0, 96.0, 18.0, 6.0), Color(UI.MINT, 0.8), 3.0)
 	if sim.tier > 0:
-		var chip := Rect2(46.0, 128.0, 108.0, 30.0)
-		panel(chip, Color(UI.ACCENT, 0.2), 15.0)
-		text_center(chip.get_center(), t("tier_label") % sim.tier, fit_size(t("tier_label") % sim.tier, 17, 96.0), UI.ACCENT, font_body)
-	text_center(Vector2(BASE_W / 2.0, 58.0), t("hud_damage"), 18, UI.MUTED, font_label)
-	text_center(Vector2(BASE_W / 2.0, 98.0), I18n.format_number(sim.total_damage), 38, UI.TEXT)
-	if sim.waves_left > 0:
-		text_center(Vector2(BASE_W / 2.0, 134.0), t("hud_waves") % sim.waves_left, 20, UI.MINT, font_body)
+		text_left(Vector2(40.0, 126.0), "T%d" % sim.tier, 22, UI.ACCENT)
 	var coin_size := int(36.0 + coin_pop * 14.0)
 	canvas.draw_circle(Vector2(575.0, 98.0), 13.0, UI.GOLD)
 	text_center(Vector2(640.0, 98.0), I18n.format_number(sim.coins), coin_size, UI.GOLD)
@@ -1849,16 +1845,27 @@ func _draw_hud() -> void:
 		_draw_burst_gauge()
 
 
+## The run as a line of dots, with a diamond for each boss.
+func _draw_stage_pips(start: Vector2) -> void:
+	for i in GameSim.STAGES.size():
+		var c := start + Vector2(i * STAGE_PIP_SPACING, 0.0)
+		var color := UI.ACCENT if i == sim.stage else (UI.TEXT if i < sim.stage else Color(UI.MUTED, 0.3))
+		if i == sim.stage:
+			soft_glow(c, Vector2(44.0, 44.0), Color(UI.ACCENT, 0.5))
+		if (GameSim.STAGES[i] as Dictionary).has("boss"):
+			canvas.draw_colored_polygon(PackedVector2Array([c + Vector2(0.0, -10.0), c + Vector2(10.0, 0.0), c + Vector2(0.0, 10.0), c + Vector2(-10.0, 0.0)]), color)
+		else:
+			canvas.draw_circle(c, 6.0, color)
+
+
 func _draw_burst_gauge() -> void:
 	var bar := Rect2(170.0, 1250.0, 380.0, 12.0)
-	text_right(bar.position + Vector2(-16.0, 6.0), t("burst"), 16, UI.MUTED, font_label)
 	panel(bar, Color(1.0, 1.0, 1.0, 0.1), 6.0)
 	if sim.burst_charge > 0.0:
 		var color: Color = UI.ramp(sim.burst_charge)
 		var filled := Rect2(bar.position, Vector2(maxf(bar.size.x * sim.burst_charge, 12.0), bar.size.y))
 		soft_glow(filled.end - Vector2(0.0, 6.0), Vector2(70.0, 70.0), Color(color, 0.5))
 		panel(filled, color, 6.0)
-	text_left(bar.end + Vector2(16.0, -6.0), "%d%%" % int(sim.burst_charge * 100.0), 18, UI.MUTED, font_body)
 
 
 ## The combo counter grows, brightens and shifts color as the chain climbs.
@@ -1869,7 +1876,6 @@ func _draw_combo() -> void:
 	var size := int(minf(58.0 + sim.combo * 0.35, 112.0) * pop)
 	soft_glow(center, Vector2(620.0, 280.0), Color(color, clampf(0.12 + sim.combo * 0.003, 0.0, 0.45)))
 	text_center(center, str(sim.combo), size, color)
-	text_center(center + Vector2(0.0, size * 0.62 + 8.0), t("hits_label"), 20, Color(color, 0.8), font_label)
 
 
 func _draw_upgrade_screen() -> void:
@@ -1877,119 +1883,100 @@ func _draw_upgrade_screen() -> void:
 	var clearing := sim.blocks.is_empty()
 	var heading := t("stage_clear") if clearing else t("pick_start")
 	var burst := 1.0 + maxf(0.25 - screen_age, 0.0) * 1.2
-	soft_glow(Vector2(BASE_W / 2.0, 190.0), Vector2(860.0, 320.0), Color(UI.GOLD, 0.2 + sin(time * 3.0) * 0.05))
-	text_center(Vector2(BASE_W / 2.0, 190.0), heading, int(fit_size(heading, 62, 640.0) * burst), UI.GOLD)
-	if clearing:
-		text_center(Vector2(BASE_W / 2.0, 262.0), t("pick_one"), 26, UI.MUTED, font_body)
+	soft_glow(Vector2(BASE_W / 2.0, 200.0), Vector2(860.0, 320.0), Color(UI.GOLD, 0.2 + sin(time * 3.0) * 0.05))
+	text_center(Vector2(BASE_W / 2.0, 200.0), heading, int(fit_size(heading, 62, 640.0) * burst), UI.GOLD)
 	var count := sim.choices.size()
 	for i in count:
 		# Cards rise in one after another.
 		var appear := clampf((screen_age - i * 0.06) / 0.22, 0.0, 1.0)
 		var ease_in := 1.0 - pow(1.0 - appear, 3.0)
-		var id := sim.choices[i]
 		var rect := card_rect(i, count)
 		rect.position.y += (1.0 - ease_in) * 70.0
-		var hint := _card_hint(id)
-		var has_hint := String(hint["text"]) != ""
-		# The icon sits in its own column, so the eye can run down the cards and compare them.
-		var icon_area := minf(rect.size.y - (56.0 if has_hint else 32.0), CARD_ICON_MAX)
-		var icon_center := rect.position + Vector2(24.0 + icon_area / 2.0, 14.0 + (rect.size.y - (40.0 if has_hint else 0.0) - 14.0) / 2.0)
-		var text_left_edge := icon_area + 34.0
-		var text_x := text_left_edge + (rect.size.x - text_left_edge) / 2.0
-		var text_width := rect.size.x - text_left_edge - 24.0
-		var perk: Dictionary = Perks.PERKS[id]
-		var color: Color = UI.RARITY[int(perk["rarity"])]
-		var evolution := Perks.is_evolution(id)
-		if evolution:
-			var pulse := 0.5 + sin(time * 4.0) * 0.5
-			soft_glow(rect.get_center(), rect.size * 1.5, Color(color, (0.2 + pulse * 0.25) * ease_in))
-		panel(rect, Color(UI.PANEL_SOLID, 0.96 * ease_in), 30.0, Color(color, (0.9 if evolution else 0.45) * ease_in), 3 if evolution else 2)
-		panel(Rect2(rect.position + Vector2(rect.size.x * 0.35, -2.0), Vector2(rect.size.x * 0.3, 5.0)), Color(color, ease_in), 2.5)
-		var tile := Rect2(icon_center - Vector2.ONE * icon_area / 2.0, Vector2.ONE * icon_area)
-		panel(tile, Color(PerkArt.color_of(id), 0.14 * ease_in), icon_area * 0.24, Color(PerkArt.color_of(id), 0.5 * ease_in), 2)
-		PerkArt.draw(canvas, id, icon_center, icon_area * 0.36, ease_in)
-		var label := t("evolution") if evolution else t("rarity_%d" % int(perk["rarity"]))
-		text_center(rect.position + Vector2(text_x, 30.0), label, 16, Color(color, ease_in), font_label)
-		var level: int = sim.levels[id]
-		if level > 0:
-			text_right(rect.position + Vector2(rect.size.x - 28.0, 30.0), t("level") % level, 19, Color(UI.MUTED, ease_in), font_body)
-		var name_text := t("perk_" + id)
-		text_center(rect.position + Vector2(text_x, rect.size.y * (0.3 if has_hint else 0.38)), name_text, fit_size(name_text, 42, text_width), Color(color, ease_in))
-		var lines := t("perk_%s_desc" % id).split("\n")
-		var line_y := rect.size.y * ((0.5 if lines.size() > 1 else 0.56) if has_hint else (0.64 if lines.size() > 1 else 0.7))
-		for l in lines.size():
-			text_center(rect.position + Vector2(text_x, line_y + l * 34.0), lines[l], fit_size(lines[l], 25, text_width), Color(UI.MUTED, ease_in), font_body)
-		if has_hint:
-			var hint_text := String(hint["text"])
-			var hint_color: Color = hint["color"]
-			text_center(rect.position + Vector2(rect.size.x / 2.0, rect.size.y - 27.0), hint_text, fit_size(hint_text, 24, rect.size.x - 50.0), Color(hint_color, ease_in))
+		_draw_card(sim.choices[i], rect, ease_in)
 
 
 ## The one line that tells a card's place in the build: what it evolves from or into,
 ## or which part of the current build it feeds.
-func _card_hint(id: String) -> Dictionary:
-	if Perks.is_evolution(id):
-		var parents: Array = Perks.PERKS[id]["requires"]
-		return {"text": t("evolve_recipe") % [t("perk_" + String(parents[0])), t("perk_" + String(parents[1]))], "color": UI.GOLD}
-	var path := sim.evolution_hint(id)
-	if bool(path.get("ready", false)):
-		return {"text": t("hint_evolve_ready") % t("perk_" + String(path["evolution"])), "color": UI.GOLD}
+## One card reads left to right: what it is, what it does, and where it leads.
+func _draw_card(id: String, rect: Rect2, alpha: float) -> void:
+	var perk: Dictionary = Perks.PERKS[id]
+	var color: Color = UI.RARITY[int(perk["rarity"])]
+	var evolution := Perks.is_evolution(id)
+	if evolution:
+		var pulse := 0.5 + sin(time * 4.0) * 0.5
+		soft_glow(rect.get_center(), rect.size * 1.5, Color(color, (0.2 + pulse * 0.25) * alpha))
+	panel(rect, Color(UI.PANEL_SOLID, 0.96 * alpha), 30.0, Color(color, (0.9 if evolution else 0.45) * alpha), 3 if evolution else 2)
+	var icon_size := minf(rect.size.y - 40.0, CARD_ICON_MAX)
+	var icon_center := Vector2(rect.position.x + 24.0 + icon_size / 2.0, rect.get_center().y)
+	var build_color := PerkArt.color_of(id)
+	var feeds_build := _feeds_build(id)
+	panel(Rect2(icon_center - Vector2.ONE * icon_size / 2.0, Vector2.ONE * icon_size), Color(build_color, 0.14 * alpha), icon_size * 0.24, Color(UI.MINT if feeds_build else build_color, (1.0 if feeds_build else 0.45) * alpha), 3 if feeds_build else 2)
+	PerkArt.draw(canvas, id, icon_center, icon_size * 0.36, alpha)
+	var path: Dictionary = {} if evolution else sim.evolution_hint(id)
+	var text_x := icon_center.x + icon_size / 2.0 + 22.0
+	var text_width := rect.end.x - text_x - (CARD_PATH_WIDTH if not path.is_empty() else 24.0)
+	var middle := rect.get_center().y
+	var name_text := t("perk_" + id)
+	text_left(Vector2(text_x, middle - 24.0), name_text, fit_size(name_text, 40, text_width), Color(color, alpha))
+	var desc := t("perk_%s_desc" % id)
+	text_left(Vector2(text_x, middle + 22.0), desc, fit_size(desc, 25, text_width), Color(UI.TEXT, 0.82 * alpha), font_body)
+	_draw_level_pips(id, Vector2(text_x + 4.0, middle + 54.0), alpha)
+	if not path.is_empty():
+		_draw_card_path(path, Vector2(rect.end.x - CARD_PATH_WIDTH / 2.0, middle), alpha)
+
+
+func _feeds_build(id: String) -> bool:
 	var owned := sim.tag_levels()
 	for tag in Perks.tags_of(id):
 		if int(owned.get(tag, 0)) > 0:
-			return {"text": t("hint_synergy") % t("tag_" + tag), "color": UI.MINT}
-	if not path.is_empty():
-		return {"text": t("hint_evolve_partner") % [t("perk_" + String(path["partner"])), t("perk_" + String(path["evolution"]))], "color": UI.STAR}
-	return {"text": "", "color": UI.MUTED}
+			return true
+	return false
+
+
+func _draw_level_pips(id: String, start: Vector2, alpha: float) -> void:
+	var level: int = sim.levels[id]
+	if level <= 0:
+		return
+	for i in int(Perks.PERKS[id]["max"]):
+		canvas.draw_circle(start + Vector2(i * 16.0, 0.0), 5.0, Color(UI.GOLD if i < level else UI.MUTED, (1.0 if i < level else 0.3) * alpha))
+
+
+## Where this card leads: the evolution lights up once taking it would open it, and until
+## then the partner it still needs waits here. The full recipe lives in the codex.
+func _draw_card_path(path: Dictionary, center: Vector2, alpha: float) -> void:
+	if path.get("ready", false):
+		var pulse := 0.5 + sin(time * 5.0) * 0.5
+		soft_glow(center, Vector2(130.0, 130.0), Color(UI.GOLD, (0.3 + pulse * 0.4) * alpha))
+		canvas.draw_arc(center, 40.0, 0.0, TAU, 40, Color(UI.GOLD, alpha), 3.0, true)
+		PerkArt.draw(canvas, path["evolution"], center, 28.0, alpha)
+		return
+	text_center(center + Vector2(-34.0, 0.0), "+", 26, Color(UI.MUTED, alpha))
+	PerkArt.draw(canvas, path["partner"], center + Vector2(4.0, 0.0), 26.0, 0.7 * alpha)
 
 
 ## The run's build: its strongest leanings on one line, then every owned perk as a chip.
 func _draw_build(top: float, max_rows: int) -> void:
-	var left := 60.0
-	var right := BASE_W - 60.0
-	var totals := sim.tag_levels()
-	var tags: Array = totals.keys()
-	tags.sort_custom(func(a: String, b: String) -> bool: return int(totals[a]) > int(totals[b]))
-	var summary: Array[String] = []
-	for tag: String in tags.slice(0, 3):
-		summary.append("%s ×%d" % [t("tag_" + tag), int(totals[tag])])
-	text_left(Vector2(left, top), t("build_title"), 20, UI.MUTED, font_label)
-	text_right(Vector2(right, top), "   ".join(summary), 22, UI.MINT)
 	var owned: Array[String] = []
 	for id in Perks.ids():
 		if int(sim.levels[id]) > 0:
 			owned.append(id)
-	if owned.is_empty():
-		text_center(Vector2(BASE_W / 2.0, top + 44.0), t("build_empty"), 22, UI.MUTED, font_body)
-		return
 	# Evolutions lead, since they are the payoff of the whole build.
 	owned.sort_custom(func(a: String, b: String) -> bool:
 		var a_evo := Perks.is_evolution(a)
 		if a_evo != Perks.is_evolution(b):
 			return a_evo
 		return int(sim.levels[a]) > int(sim.levels[b]))
-	const CHIP_H := 38.0
-	const CHIP_GAP := 8.0
-	const CHIP_SIZE := 21
-	var x := left
-	var y := top + 24.0
-	var row_index := 0
-	for id in owned:
-		var level: int = sim.levels[id]
-		var label := t("perk_" + id) if level <= 1 else "%s %d" % [t("perk_" + id), level]
-		var width: float = minf(font_body.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, CHIP_SIZE).x + 54.0, right - left)
-		if x + width > right:
-			x = left
-			y += CHIP_H + CHIP_GAP
-			row_index += 1
-			if row_index >= max_rows:
-				return
-		var chip := Rect2(x, y, width, CHIP_H)
-		var color: Color = UI.RARITY[int(Perks.PERKS[id]["rarity"])]
-		panel(chip, Color(color, 0.14), CHIP_H / 2.0, Color(color, 0.8 if Perks.is_evolution(id) else 0.4), 2)
-		PerkArt.draw(canvas, id, chip.position + Vector2(22.0, CHIP_H / 2.0), CHIP_ICON_RADIUS)
-		text_center(chip.get_center() + Vector2(14.0, 0.0), label, fit_size(label, CHIP_SIZE, width - 48.0), color, font_body)
-		x += width + CHIP_GAP
+	var per_row := int((BASE_W - 100.0 + BUILD_GAP) / (BUILD_TILE + BUILD_GAP))
+	var shown := mini(owned.size(), per_row * max_rows)
+	for i in shown:
+		var row_index := i / per_row
+		var in_row := mini(shown - row_index * per_row, per_row)
+		var left := (BASE_W - in_row * (BUILD_TILE + BUILD_GAP) + BUILD_GAP) / 2.0
+		var tile := Rect2(left + (i % per_row) * (BUILD_TILE + BUILD_GAP), top + row_index * (BUILD_TILE + BUILD_GAP), BUILD_TILE, BUILD_TILE)
+		var color: Color = PerkArt.color_of(owned[i])
+		var evolved := Perks.is_evolution(owned[i])
+		panel(tile, Color(color, 0.12), 14.0, UI.GOLD if evolved else Color(color, 0.35), 2)
+		PerkArt.draw(canvas, owned[i], tile.get_center(), 18.0)
 
 
 func card_rect(index: int, count: int) -> Rect2:
@@ -2001,60 +1988,41 @@ func card_rect(index: int, count: int) -> Rect2:
 
 
 func _draw_end_screen(title: String, color: Color) -> void:
-	fill_screen(Color(UI.INK, 0.86))
+	fill_screen(Color(UI.INK, 0.9))
 	var pop := 1.0 + maxf(0.3 - screen_age, 0.0) * 1.2
-	soft_glow(Vector2(BASE_W / 2.0, 124.0), Vector2(860.0, 300.0), Color(color, 0.22))
-	text_center(Vector2(BASE_W / 2.0, 124.0), title, int(fit_size(title, 72, 640.0) * pop), color)
+	soft_glow(Vector2(BASE_W / 2.0, 130.0), Vector2(860.0, 280.0), Color(color, 0.2))
+	text_center(Vector2(BASE_W / 2.0, 130.0), title, int(fit_size(title, 60, 640.0) * pop), color)
 	var cause := _defeat_line()
 	if cause != "":
-		text_center(Vector2(BASE_W / 2.0, 176.0), cause, fit_size(cause, 26, 620.0), UI.MUTED, font_body)
+		text_center(Vector2(BASE_W / 2.0, 186.0), cause, fit_size(cause, 24, 620.0), UI.MUTED, font_body)
+	_draw_run_rank(Vector2(BASE_W / 2.0, 330.0))
 	if run_new_record:
-		var chip := Rect2(BASE_W / 2.0 - 150.0, 198.0, 300.0, 48.0)
-		panel(chip, Color(UI.GOLD, 0.14 + sin(time * 5.0) * 0.05), 24.0, UI.GOLD, 2)
-		text_center(chip.get_center(), t("new_record"), fit_size(t("new_record"), 25, 270.0), UI.GOLD)
-	_draw_run_rank(Vector2(615.0, 310.0))
-	text_center(Vector2(BASE_W / 2.0, 272.0), t("total_damage"), 20, UI.MUTED, font_label)
-	text_center(Vector2(BASE_W / 2.0, 326.0), I18n.format_number(_counted(sim.total_damage)), 72, UI.TEXT)
-	panel(Rect2(70.0, 376.0, 580.0, 240.0), UI.PANEL, 28.0, UI.LINE, 2)
-	var seconds := int(run_seconds)
-	var rows := [
-		["best_shot", I18n.format_number(sim.best_shot_damage)],
-		["best_combo", str(sim.best_combo)],
-		["coins", t("coins_balance") % [I18n.format_number(_counted(sim.coins)), I18n.format_number(save.coins - sim.coins + _counted(sim.coins))]],
-		["reached", "%d / %d" % [sim.stage + 1, GameSim.STAGES.size()]],
-		["play_time", "%d:%02d" % [seconds / 60, seconds % 60]],
-		["mastery_row", "%s Lv %d  +%d" % [t("ball_" + sim.ball_type), save.mastery_level(sim.ball_type), SaveData.run_xp(sim.stage + 1, sim.state == GameSim.State.WON, sim.tier)]],
-	]
-	for i in rows.size():
-		row(Vector2(105.0, 404.0 + i * 38.0), 510.0, t(rows[i][0]), rows[i][1], 24, UI.TEXT)
-	_draw_next_unlock(Rect2(70.0, 628.0, 580.0, 88.0))
-	_draw_build(734.0, 3)
-	var after: int = end_preview.get("power", 0)
-	var now := save.power_rating()
-	if after > now:
-		var gain := t("power_gain") % ceili(100.0 * float(after - now) / float(now))
-		text_center(Vector2(BASE_W / 2.0, 908.0), gain, fit_size(gain, 24, 600.0), UI.GOLD)
+		text_center(Vector2(BASE_W / 2.0, 446.0), t("new_record"), fit_size(t("new_record"), 24, 500.0), UI.GOLD)
+	text_right(Vector2(BASE_W / 2.0 - 28.0, 508.0), I18n.format_number(_counted(sim.total_damage)), 46, UI.TEXT)
+	var coin_text := "+" + I18n.format_number(_counted(sim.coins))
+	canvas.draw_circle(Vector2(BASE_W / 2.0 + 44.0, 508.0), 15.0, UI.GOLD)
+	text_left(Vector2(BASE_W / 2.0 + 70.0, 508.0), coin_text, 46, UI.GOLD)
+	_draw_stage_pips(Vector2(BASE_W / 2.0 - (GameSim.STAGES.size() - 1) * STAGE_PIP_SPACING / 2.0, 568.0))
+	_draw_next_unlock(Rect2(110.0, 610.0, 500.0, 70.0))
+	_draw_build(708.0, 3)
 
 
+## The grade is the hero of the screen, and lands as the numbers finish counting.
 func _draw_run_rank(center: Vector2) -> void:
-	var rank := sim.run_rank()
-	var color: Color = RANK_COLORS[rank]
-	# It lands just as the numbers finish counting, as the last beat of the results.
 	var since := end_age - COUNT_UP_SECONDS
 	if since < 0.0:
 		return
+	var rank := sim.run_rank()
+	var color: Color = RANK_COLORS[rank]
 	var pop := 1.0 + maxf(0.16 - since, 0.0) * 5.0
-	soft_glow(center, Vector2(220.0, 180.0), Color(color, 0.4))
-	text_center(center + Vector2(0.0, -50.0), t("run_rank"), 18, UI.MUTED, font_label)
-	text_shadowed(center, GameSim.RANKS[rank], int(fit_size(GameSim.RANKS[rank], 64, 160.0) * pop), color)
+	soft_glow(center, Vector2(520.0, 400.0), Color(color, 0.45))
+	text_shadowed(center, GameSim.RANKS[rank], int(fit_size(GameSim.RANKS[rank], 170, 460.0) * pop), color)
 
 
-## Says what ended the run, so the next one has something to try differently.
+## Only a boss needs saying: blocks reaching the line is plain from the field itself.
 func _defeat_line() -> String:
-	if sim.state != GameSim.State.LOST:
+	if sim.state != GameSim.State.LOST or sim.boss_block == null:
 		return ""
-	if sim.boss_block == null:
-		return t("defeat_blocks")
 	var boss: Dictionary = sim.boss_block
 	var percent := ceili(100.0 * float(boss["hp"]) / maxf(float(boss["max_hp"]), 1.0))
 	return t("defeat_boss") % [t("boss_%s_name" % sim.boss_id()), percent]
@@ -2066,18 +2034,12 @@ func _draw_next_unlock(box: Rect2) -> void:
 		return
 	var reward := t("perk_" + String(goal["perk"])) if goal["perk"] != "" else t("ball_" + String(goal["ball"]))
 	var progress: float = goal["progress"]
-	var left := box.position.x + 26.0
-	var right := box.end.x - 26.0
-	panel(box, UI.PANEL, 24.0, UI.LINE, 2)
-	text_left(Vector2(left, box.position.y + 22.0), t("next_unlock"), 18, UI.MUTED, font_label)
-	text_right(Vector2(right, box.position.y + 22.0), reward, fit_size(reward, 24, 330.0), UI.MINT)
-	var goal_title := menus.achievement_title(goal["id"])
-	text_left(Vector2(left, box.position.y + 50.0), goal_title, fit_size(goal_title, 20, 440.0), UI.TEXT, font_body)
-	text_right(Vector2(right, box.position.y + 50.0), "%d%%" % int(progress * 100.0), 20, UI.MUTED, font_body)
-	var bar := Rect2(left, box.position.y + 68.0, right - left, 8.0)
+	text_left(box.position + Vector2(0.0, 16.0), t("next_unlock"), 18, UI.MUTED, font_label)
+	text_right(Vector2(box.end.x, box.position.y + 16.0), reward, fit_size(reward, 24, 330.0), UI.MINT)
+	var bar := Rect2(box.position + Vector2(0.0, 40.0), Vector2(box.size.x, 8.0))
 	panel(bar, Color(1.0, 1.0, 1.0, 0.08), 4.0)
 	if progress > 0.0:
-		panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 8.0), bar.size.y)), UI.ACCENT, 4.0)
+		panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 8.0), bar.size.y)), UI.MINT, 4.0)
 
 
 ## Largest size up to `size` at which the text fits, so no language can overflow a box.

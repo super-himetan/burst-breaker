@@ -3,6 +3,8 @@ extends RefCounted
 ## Every `every` levels an item pays a milestone: `bonus` adds up like `add`, `bonus_mult` multiplies.
 ## `level_mult` multiplies on every level. `after_all` items open once the rest are maxed.
 
+const GLYPHS := {"damage": "sword", "coins": "coin", "balls": "balls", "crit": "star", "blast": "bomb", "toxin": "drop", "luck": "clover", "reroll": "reroll", "guard": "shield", "start_perk": "cards", "infinity": "blast_rings"}
+
 const ITEMS := {
 	"damage": {"max": 40, "base": 30.0, "growth": 1.2, "add": {"damage_pct": 0.08}, "every": 10, "bonus_mult": {"damage_mult": 1.5}},
 	"coins": {"max": 30, "base": 40.0, "growth": 1.25, "add": {"coin_pct": 0.1}, "every": 10, "bonus": {"coin_pct": 0.5}},

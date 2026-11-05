@@ -84,7 +84,14 @@ const GLYPHS := {
 	"gauge": [["arc", 0, 0.28, 0.78, 180, 360, 0.2], ["line", [0, 0.28, 0.5, -0.32], 0.15], ["disc", 0, 0.28, 0.16]],
 	"steps": [["line", [-0.62, 0.86, -0.62, 0.3], 0.32], ["line", [0, 0.86, 0, -0.18], 0.32], ["line", [0.62, 0.86, 0.62, -0.78], 0.32]],
 	"flag": [["line", [-0.52, -0.92, -0.52, 0.92], 0.15], ["poly", [-0.46, -0.88, 0.8, -0.45, -0.46, -0.02]]],
+	"gear": [["ring", 0, 0, 0.5, 0.26], ["line", [0, -0.95, 0, -0.65], 0.24], ["line", [0, 0.65, 0, 0.95], 0.24], ["line", [-0.95, 0, -0.65, 0], 0.24], ["line", [0.65, 0, 0.95, 0], 0.24], ["line", [-0.67, -0.67, -0.46, -0.46], 0.24], ["line", [0.46, -0.46, 0.67, -0.67], 0.24], ["line", [-0.67, 0.67, -0.46, 0.46], 0.24], ["line", [0.46, 0.46, 0.67, 0.67], 0.24]],
 }
+
+
+## A bare shape, for menus and anything else that is not a perk.
+static func draw_glyph(canvas: CanvasItem, glyph: String, center: Vector2, radius: float, color: Color) -> void:
+	for shape: Array in GLYPHS[glyph]:
+		_draw_shape(canvas, shape, center, radius, color)
 
 
 static func color_of(id: String) -> Color:
