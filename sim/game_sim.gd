@@ -10,6 +10,7 @@ const Bosses := preload("res://data/bosses.gd")
 const Layouts := preload("res://data/layouts.gd")
 const Formations := preload("res://data/formations.gd")
 const RunContent := preload("res://data/run_content.gd")
+const Worlds := preload("res://data/worlds.gd")
 
 enum State { AIM, SHOOT, UPGRADE, WON, LOST, ROUTE, EVENT }
 
@@ -64,6 +65,23 @@ const STAGES := [
 	{"rows": 3, "waves": 0, "hp_min": 70, "hp_max": 140, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"pool": 1, "hp": 16000, "every": 1}},
 ]
 
+## Reached only by players who have beaten every other boss.
+const TRUE_STAGE := {"rows": 3, "waves": 0, "hp_min": 90, "hp_max": 180, "density": 0.65, "specials": {"bomb": 0.1, "armor": 0.1}, "boss": {"pool": 2, "hp": 42000, "every": 1}}
+const RUSH_STAGE_POOL := {0: 3, 1: 7, 2: 7}
+const ELITE_CHANCE := 0.1
+const ELITE_HP := 4.0
+const ELITE_COINS := 8.0
+const BOUNTY_CHANCE := 0.12
+const BOUNTY_HP := 2.5
+const BOUNTY_COINS := 18.0
+const BOUNTY_TURNS := 4
+const FEVER_COMBO := 120
+const FEVER_COINS := 3.0
+const JACKPOT_CHANCE := 0.05
+const JACKPOT_COINS := 25.0
+const NOTE_CHANCE := 0.6
+const ALLY_HP := 0.3
+const ORIGIN_TRICKS := 3
 const BOSS_SIZE := Vector2i(3, 2)
 const BUMPER_RADIUS := 26.0
 const PORTAL_RADIUS := 24.0
@@ -129,6 +147,11 @@ var obstacles := {}
 var _formation_rows: Array[Dictionary] = []
 ## What the run is doing between stages. Routes appear only when the config turns them on.
 var routes_enabled := false
+var world := "wall"
+var fever := false
+var true_path := false
+var rush: Array[String] = []
+var attack_element := ""
 var route_options: Array[String] = []
 var event := {}
 var relics: Array[String] = []
@@ -220,6 +243,13 @@ func new_run(seed_value: int, config := {}) -> void:
 	boss_force = String(config.get("boss_force", ""))
 	boss_force_own_pool = bool(config.get("boss_force_own_pool", false))
 	routes_enabled = bool(config.get("routes", false))
+	world = String(config.get("world", "wall"))
+	true_path = bool(config.get("true_path", false))
+	rush = []
+	for id: String in config.get("rush", []):
+		rush.append(id)
+	fever = false
+	attack_element = String(Balls.BALLS.get(ball_type, {}).get("element", ""))
 	route_options = []
 	event = {}
 	relics = []
@@ -244,7 +274,7 @@ func new_run(seed_value: int, config := {}) -> void:
 	shots = 0
 	sim_time = 0.0
 	bonus_balls = 0
-	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0, "overkills": 0, "style_s": 0}
+	counters = {"kills": 0, "explosions": 0, "splits": 0, "crits": 0, "poison_damage": 0, "bosses": 0, "treasures": 0, "evolutions": 0, "bursts": 0, "overkills": 0, "style_s": 0, "awakened": 0, "bounties": 0, "fevers": 0}
 	last_shot_score = 0.0
 	last_shot_rank = 0
 	_style_total = 0.0
@@ -329,6 +359,7 @@ func fire(dir: Vector2) -> bool:
 	combo = 0
 	shot_damage = 0
 	shots += 1
+	fever = false
 	_shot_start_blocks = maxi(unique_blocks().size(), 1)
 	_shot_start_kills = int(counters["kills"])
 	_shot_balls = shot_ball_count()
@@ -491,7 +522,7 @@ func _go_to_next_stage() -> void:
 
 
 func _final_stage() -> int:
-	return STAGES.size() - 1
+	return stage_total() - 1
 
 
 func _roll_routes() -> Array[String]:
@@ -775,6 +806,26 @@ func _recompute_stats() -> void:
 	ball_speed = BALL_SPEED * (1.0 + stat("speed_pct"))
 
 
+## Where a stage's numbers come from, whichever kind of run this is.
+func stage_cfg() -> Dictionary:
+	if not rush.is_empty():
+		var at := mini(stage, rush.size() - 1)
+		return STAGES[RUSH_STAGE_POOL[int(Bosses.BOSSES[rush[at]]["pool"])]]
+	return TRUE_STAGE if stage >= STAGES.size() else STAGES[stage]
+
+
+func stage_total() -> int:
+	if not rush.is_empty():
+		return rush.size()
+	return STAGES.size() + (1 if true_path else 0)
+
+
+func is_boss_stage(index: int) -> bool:
+	if not rush.is_empty() or index >= STAGES.size():
+		return true
+	return (STAGES[index] as Dictionary).has("boss")
+
+
 func _start_stage() -> void:
 	blocks = {}
 	balls = []
@@ -787,16 +838,18 @@ func _start_stage() -> void:
 	_build_obstacles()
 	_pending_blasts = []
 	_launch_left = 0
-	var cfg: Dictionary = STAGES[stage]
+	var cfg: Dictionary = stage_cfg()
 	waves_left = maxi(int(cfg["waves"]) + int(stat("wave_delta")), 0) if not cfg.has("boss") else 0
 	var first_rows := int(cfg["rows"])
 	_formation_rows = Formations.queue_for(first_rows + waves_left, _rng)
+	_apply_world_elements()
 	# The bottom of the picture goes in first, with the rest following it down as waves.
 	var top := BOSS_SIZE.y + 1 if cfg.has("boss") else 0
 	if cfg.has("boss"):
 		_spawn_boss(cfg["boss"])
 	for i in first_rows:
 		_spawn_row(top + first_rows - 1 - i)
+	_maybe_spawn_bounty()
 	_emit({"type": "stage_start", "stage": stage, "boss": cfg.has("boss"), "boss_id": boss_id()})
 
 
@@ -848,9 +901,28 @@ func boss_id() -> String:
 
 
 ## Bosses the player has not met yet come first, so the whole cast shows up quickly.
+func pool_rolls(chance: float) -> bool:
+	return _rng.randf() < chance
+
+
+## The second boss of a double battle stands beside the first and shields it until it falls.
+func _spawn_partner(boss: Dictionary, partner: String, boss_hp: int) -> void:
+	var at := Vector2i(COLS - BOSS_SIZE.x, 0)
+	var ally := _new_block(maxi(int(boss_hp * ALLY_HP), 1), "normal", at, BOSS_SIZE)
+	ally["post"] = at - (boss["origin"] as Vector2i)
+	ally["ally_id"] = partner
+	for y in BOSS_SIZE.y:
+		for x in BOSS_SIZE.x:
+			blocks[at + Vector2i(x, y)] = ally
+	boss["guards"] = [ally]
+	_boss_action("guards", {"targets": [block_rect(ally).get_center()]})
+
+
 func _pick_boss(pool: int) -> String:
 	if boss_force != "" and (not boss_force_own_pool or int(Bosses.BOSSES[boss_force]["pool"]) == pool):
 		return boss_force
+	if not rush.is_empty():
+		return rush[mini(stage, rush.size() - 1)]
 	var options := Bosses.in_pool(pool, tier)
 	var fresh := options.filter(func(id: String) -> bool: return not _boss_met.has(id))
 	var from: Array = fresh if not fresh.is_empty() else options
@@ -861,13 +933,20 @@ func _spawn_boss(cfg: Dictionary) -> void:
 	var id := _pick_boss(int(cfg["pool"]))
 	var data: Dictionary = Bosses.BOSSES[id]
 	var scale := 2.0 if Tiers.has_rule(tier, "boss_hp") else 1.0
+	var awakened := tier >= Bosses.AWAKENED_MIN_TIER and pool_rolls(Bosses.AWAKENED_CHANCE)
+	if awakened:
+		scale *= Bosses.AWAKENED_HP
 	var hp := _block_hp(float(cfg["hp"]) * float(data["hp"]) * scale)
-	var origin := Vector2i((COLS - BOSS_SIZE.x) / 2, 0)
+	var partner := ""
+	if int(cfg["pool"]) == 1 and tier >= Bosses.DUO_MIN_TIER and Bosses.PARTNERS.has(id) and pool_rolls(Bosses.DUO_CHANCE):
+		partner = Bosses.PARTNERS[id]
+	var origin := Vector2i((COLS - BOSS_SIZE.x) / 2 if partner == "" else 0, 0)
 	var block := _new_block(hp, "boss", origin, BOSS_SIZE)
 	block["boss_id"] = id
-	block["summon"] = data["summon"]
+	block["summon"] = int(data["summon"]) + (1 if awakened else 0)
+	block["awakened"] = awakened
 	block["minion"] = data["minion"]
-	block["every"] = cfg["every"]
+	block["every"] = maxi(int(cfg["every"]) - (1 if awakened else 0), 1)
 	block["age"] = 0
 	block["angry"] = false
 	block["next_split"] = 1.0 - SLIME_STEP
@@ -883,13 +962,28 @@ func _spawn_boss(cfg: Dictionary) -> void:
 			blocks[origin + Vector2i(x, y)] = block
 	if id == "gantetsu":
 		_spawn_guards(block)
+	if partner != "":
+		_spawn_partner(block, partner, hp)
+
+
+## Whole pictures share an element, so a chapter's colours arrive in readable groups.
+func _apply_world_elements() -> void:
+	var element: String = Worlds.WORLDS.get(world, Worlds.WORLDS["wall"])["element"]
+	if element == "":
+		return
+	var current := false
+	for entry in _formation_rows:
+		if int(entry["index"]) == int(entry["height"]) - 1:
+			current = _rng.randf() < Worlds.ELEMENT_CHANCE
+		if current:
+			entry["element"] = element
 
 
 func _spawn_row(row: int) -> void:
 	if _formation_rows.is_empty():
 		_formation_rows = Formations.queue_for(1, _rng)
 	var entry: Dictionary = _formation_rows.pop_front()
-	var cfg: Dictionary = STAGES[stage]
+	var cfg: Dictionary = stage_cfg()
 	var pattern: String = entry["row"]
 	var kinds := {}
 	for col in COLS:
@@ -902,6 +996,9 @@ func _spawn_row(row: int) -> void:
 		if size == Vector2i.ONE and not kinds.has(mirror):
 			kinds[mirror] = _roll_block_kind(cfg["specials"])
 		var kind: String = kinds[mirror] if size == Vector2i.ONE else "normal"
+		# The centre of a row is the natural seat for a tougher, richer block.
+		if col == COLS / 2 and size == Vector2i.ONE and stage > 0 and rush.is_empty() and _rng.randf() < ELITE_CHANCE:
+			kind = "elite"
 		_place_formation_block(Vector2i(col, row), size, kind, entry, cfg)
 
 
@@ -916,6 +1013,8 @@ func _place_formation_block(cell: Vector2i, size: Vector2i, kind: String, entry:
 				return
 	var strength := Formations.toughness(cell.x + (size.x - 1) / 2.0, int(entry["index"]), int(entry["height"]), int(entry["mode"]))
 	var hp := _block_hp(lerpf(float(cfg["hp_min"]), float(cfg["hp_max"]), strength) * size.x * size.y)
+	if kind == "elite":
+		hp = int(hp * ELITE_HP)
 	if kind == "treasure" or kind == "extra_ball":
 		hp = maxi(hp / 2, 1)
 	if kind == "shield":
@@ -923,6 +1022,9 @@ func _place_formation_block(cell: Vector2i, size: Vector2i, kind: String, entry:
 		hp = 3 + (mini(cell.x, COLS - 1 - cell.x) + cell.y) % 4 + stage
 	var block := _new_block(hp, kind, origin, size)
 	block["shape"] = _shape_at(entry["shape"], cell)
+	var element: String = entry.get("element", "")
+	if element != "":
+		block["element"] = element
 	for y in size.y:
 		for x in size.x:
 			blocks[origin + Vector2i(x, y)] = block
@@ -938,7 +1040,7 @@ func _shape_at(shape: String, cell: Vector2i) -> String:
 func _place_block(cell: Vector2i) -> bool:
 	if blocks.has(cell) or obstacles.has(cell):
 		return false
-	var cfg: Dictionary = STAGES[stage]
+	var cfg: Dictionary = stage_cfg()
 	var kind := _roll_block_kind(cfg["specials"])
 	var hp := _block_hp(_rng.randf_range(float(cfg["hp_min"]), float(cfg["hp_max"])))
 	if kind == "treasure" or kind == "extra_ball":
@@ -1328,6 +1430,7 @@ func _scale_damage(damage: float, block: Dictionary) -> float:
 		scaled *= 1.0 + stat("safe_damage") * maxi(death_row - _lowest_row() - 1, 0)
 	if block["kind"] == "boss":
 		scaled *= 1.0 + stat("boss_damage")
+	scaled *= Worlds.multiplier(attack_element, block.get("element", ""))
 	return scaled
 
 
@@ -1384,6 +1487,10 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 	if not flags.get("dot", false):
 		combo += 1
 		best_combo = maxi(best_combo, combo)
+		if combo >= FEVER_COMBO and not fever:
+			fever = true
+			counters["fevers"] += 1
+			_emit({"type": "fever"})
 		if not _burst_shot:
 			_charge_burst()
 			_companion_hit()
@@ -1443,9 +1550,19 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary, overkill 
 	if kind == "treasure":
 		gained = 6.0 + stage * 3.0
 		counters["treasures"] += 1
+	if kind == "elite":
+		gained = ELITE_COINS * (stage + 1)
+	if kind == "bounty":
+		gained = BOUNTY_COINS * (stage + 1)
+		counters["bounties"] += 1
 	if kind == "boss":
 		gained = 25.0 * (stage + 1) * (1.0 + stat("boss_coins"))
 		counters["bosses"] += 1
+		if block["awakened"]:
+			gained *= Bosses.AWAKENED_COINS
+			counters["awakened"] += 1
+		if _rng.randf() < NOTE_CHANCE:
+			_emit({"type": "note"})
 		counters["boss_" + String(block["boss_id"])] = int(counters.get("boss_" + String(block["boss_id"]), 0)) + 1
 		boss_block = null
 	if overkill > 0:
@@ -1481,7 +1598,7 @@ func _spread_plague(cell: Vector2i, poison: int) -> void:
 
 ## Fractions carry over, so small rewards still add up exactly.
 func _grant_coins(base: float) -> int:
-	_coin_carry += base * (1.0 + stat("coin_pct")) * _coin_scale * _stage_coin_mult
+	_coin_carry += base * (1.0 + stat("coin_pct")) * _coin_scale * _stage_coin_mult * (FEVER_COINS if fever else 1.0)
 	var amount := int(_coin_carry)
 	_coin_carry -= amount
 	coins += amount
@@ -1599,6 +1716,9 @@ func _end_shot() -> void:
 		state = State.AIM
 		return
 	_descend()
+	if _is_stage_finished():
+		_clear_stage()
+		return
 	if _check_death():
 		return
 	state = State.AIM
@@ -1737,12 +1857,15 @@ func _descend() -> void:
 			var post: Vector2i = origin + (guard["post"] as Vector2i)
 			guard["slid"] = post.y != (guard["origin"] as Vector2i).y
 			guard["origin"] = post
-			moved[post] = guard
+			for gy in int(guard["size"].y):
+				for gx in int(guard["size"].x):
+					moved[post + Vector2i(gx, gy)] = guard
 	# Bottom rows first, so blocks stack up against the boss instead of overlapping it.
+	_move_bounties(moved)
 	var falling := unique_blocks()
 	falling.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["origin"].y) + int(a["size"].y) > int(b["origin"].y) + int(b["size"].y))
 	for block in falling:
-		if block["kind"] == "boss" or block.has("post"):
+		if block["kind"] == "boss" or block.has("post") or block["kind"] == "bounty":
 			continue
 		var origin: Vector2i = block["origin"]
 		var target := origin + Vector2i.DOWN
@@ -1769,6 +1892,44 @@ func _descend() -> void:
 	_boss_trick()
 	_summon_if_due()
 	_emit({"type": "descend"})
+
+
+## A bounty never falls: it scuttles along its row, and leaves if it is not caught in time.
+func _move_bounties(moved: Dictionary) -> void:
+	for block in unique_blocks():
+		if block["kind"] != "bounty":
+			continue
+		block["turns"] = int(block["turns"]) - 1
+		var origin: Vector2i = block["origin"]
+		if int(block["turns"]) <= 0:
+			_emit({"type": "bounty_escaped", "pos": block_rect(block).get_center()})
+			continue
+		var next := origin + Vector2i(int(block["dir"]), 0)
+		if next.x < 0 or next.x >= COLS or moved.has(next) or obstacles.has(next):
+			block["dir"] = -int(block["dir"])
+			next = origin
+		block["slid"] = false
+		block["origin"] = next
+		moved[next] = block
+
+
+func _maybe_spawn_bounty() -> void:
+	if stage == 0 or stage_cfg().has("boss") or not rush.is_empty() or _rng.randf() >= BOUNTY_CHANCE:
+		return
+	var free: Array[Vector2i] = []
+	for y in range(5, 6):
+		for x in COLS:
+			var cell := Vector2i(x, y)
+			if not blocks.has(cell) and not obstacles.has(cell):
+				free.append(cell)
+	if free.is_empty():
+		return
+	var cell: Vector2i = free[_rng.randi_range(0, free.size() - 1)]
+	var block := _new_block(_block_hp(float(stage_cfg()["hp_max"]) * BOUNTY_HP), "bounty", cell)
+	block["turns"] = BOUNTY_TURNS
+	block["dir"] = 1 if _rng.randf() < 0.5 else -1
+	blocks[cell] = block
+	_emit({"type": "bounty", "pos": cell_rect(cell).get_center()})
 
 
 func _covers_obstacle(origin: Vector2i, size: Vector2i) -> bool:
@@ -1834,7 +1995,7 @@ func _summon_if_due() -> void:
 
 
 func _minion_hp() -> int:
-	var cfg: Dictionary = STAGES[stage]
+	var cfg: Dictionary = stage_cfg()
 	return _block_hp(_rng.randf_range(float(cfg["hp_min"]), float(cfg["hp_max"])))
 
 
@@ -1940,6 +2101,16 @@ func _boss_trick() -> void:
 		"void":
 			burst_charge = maxf(burst_charge - (VOID_ANGRY_DRAIN if boss["angry"] else VOID_DRAIN), 0.0)
 			_boss_action("drain")
+		"origin":
+			# It has fought every keeper, and uses what it learned from each in turn.
+			match int(boss["age"]) % ORIGIN_TRICKS:
+				0:
+					_heal_boss(LUMINA_HEAL, "heal")
+				1:
+					_throw_bombs(boss)
+				_:
+					burst_charge = maxf(burst_charge - VOID_DRAIN, 0.0)
+					_boss_action("drain")
 
 
 ## Gantetsu: while either bodyguard stands, hits barely scratch it.
@@ -1947,7 +2118,7 @@ func _spawn_guards(boss: Dictionary) -> void:
 	var origin: Vector2i = boss["origin"]
 	var guards_list: Array = []
 	var targets: Array[Vector2] = []
-	var cfg: Dictionary = STAGES[stage]
+	var cfg: Dictionary = stage_cfg()
 	for post: Vector2i in [Vector2i(-1, 1), Vector2i(BOSS_SIZE.x, 1)]:
 		var placed: Variant = _put_block(origin + post, "armor", _block_hp(float(cfg["hp_max"]) * GUARD_HP))
 		if placed != null:
@@ -2088,12 +2259,16 @@ func _clear_stage() -> void:
 	_stages_cleared += 1
 	var earned_interest := int(floor(coins * stat("interest")))
 	coins += earned_interest
-	if stage >= STAGES.size() - 1:
+	if stage >= _final_stage():
 		state = State.WON
+		if not rush.is_empty():
+			counters["rush_clears"] = 1
 		_emit({"type": "won"})
 		return
+	if _rng.randf() < JACKPOT_CHANCE + stat("luck") * JACKPOT_CHANCE:
+		_emit({"type": "jackpot", "coins": _grant_coins(JACKPOT_COINS * (stage + 1))})
 	picks_pending = 1
-	if STAGES[stage].has("boss"):
+	if stage_cfg().has("boss"):
 		picks_pending += BOSS_STAGE_EXTRA_PICKS
 		# Beating a boss is what relics are for, when the run has roads to spend them on.
 		if routes_enabled and relics.size() < RunContent.MAX_RELICS:

@@ -12,10 +12,11 @@ const Perks := preload("res://data/perks.gd")
 const PerkArt := preload("res://perk_art.gd")
 const Shop := preload("res://data/shop.gd")
 const StarTree := preload("res://data/star_tree.gd")
+const Cosmetics := preload("res://data/cosmetics.gd")
 const Tiers := preload("res://data/tiers.gd")
 const GameSim := preload("res://sim/game_sim.gd")
 
-enum Screen { TITLE, HOWTO, SETTINGS, GAME, LOADOUT, SHOP, ACHIEVEMENTS, CODEX, PRESTIGE, STARS }
+enum Screen { TITLE, HOWTO, SETTINGS, GAME, LOADOUT, SHOP, ACHIEVEMENTS, CODEX, PRESTIGE, STARS, COSMETICS, ENDING }
 
 const BASE_W := 720.0
 const BASE_H := 1280.0
@@ -26,8 +27,10 @@ const SHOP_ROW_H := 118.0
 const ACHIEVEMENT_ROW_H := 98.0
 const CODEX_ROW_H := 110.0
 const BLOCK_KINDS: Array[String] = ["normal", "round", "hex", "diamond", "tri_up", "pill", "big", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss", "wall", "mover", "ramp_l", "bumper", "portal"]
-const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses"]
+const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses", "notes"]
 const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
+const COSMETIC_ROW_H := 84.0
+const NOTE_ROW_H := 130.0
 const HOWTO_GLYPHS: Array[String] = ["crosshair", "bolt", "flag", "", "coin"]
 const TITLE_GLYPHS := {"shop": "coin", "achievements": "crown", "codex": "cards", "prestige": "star", "howto": "target", "settings": "gear"}
 const BUY_ALL_STEP := 0.07
@@ -78,7 +81,7 @@ func on_enter(screen: int) -> void:
 
 
 func is_list_screen(screen: int) -> bool:
-	return screen in [Screen.SHOP, Screen.ACHIEVEMENTS, Screen.CODEX, Screen.STARS]
+	return screen in [Screen.SHOP, Screen.ACHIEVEMENTS, Screen.CODEX, Screen.STARS, Screen.COSMETICS]
 
 
 func update(delta: float, screen: int) -> void:
@@ -160,6 +163,9 @@ func buttons(screen: int) -> Array[Dictionary]:
 			if save.max_tier() > 0:
 				list.append(_button("tier_down", Rect2(50.0, 660.0, 100.0, 80.0), "<", "normal" if save.tier > 0 else "disabled"))
 				list.append(_button("tier_up", Rect2(570.0, 660.0, 100.0, 80.0), ">", "normal" if save.tier < save.max_tier() else "disabled"))
+			list.append(_button("cosmetics", Rect2(50.0, 40.0, 150.0, 66.0), t("cosmetics"), "small"))
+			if save.can_rush():
+				list.append(_button("rush", Rect2(520.0, 40.0, 150.0, 66.0), t("rush"), "small"))
 			list.append(_button("pilot", Rect2(50.0, 866.0, 305.0, 84.0), t("pilot_" + String(save.pilot))))
 			list.append(_button("contract", Rect2(365.0, 866.0, 305.0, 84.0), t("contract_" + String(save.contract)), "normal" if int(save.wins) > 0 else "disabled"))
 			list.append(_button("go", Rect2(90.0, 1000.0, 540.0, 110.0), t("go"), "primary"))
@@ -178,8 +184,12 @@ func buttons(screen: int) -> Array[Dictionary]:
 				return list
 			for i in CODEX_TABS.size():
 				var tab := CODEX_TABS[i]
-				var rect := Rect2(40.0 + i * 162.0, 122.0, 152.0, 70.0)
+				var rect := Rect2(36.0 + i * 130.0, 122.0, 122.0, 70.0)
 				list.append(_button("tab_" + tab, rect, t("codex_" + tab), "selected" if codex_tab == tab else "normal"))
+			list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
+		Screen.ENDING:
+			list.append(_button("ending_close", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
+		Screen.COSMETICS:
 			list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
 		Screen.PRESTIGE:
 			if confirm_prestige:
@@ -265,9 +275,13 @@ func list_height(screen: int) -> float:
 			return save.shop_ids().size() * (SHOP_ROW_H + ROW_GAP)
 		Screen.STARS:
 			return StarTree.ids().size() * (SHOP_ROW_H + ROW_GAP)
+		Screen.COSMETICS:
+			return Cosmetics.ids().size() * (COSMETIC_ROW_H + ROW_GAP)
 		Screen.ACHIEVEMENTS:
 			return _achievement_rows.size() * (ACHIEVEMENT_ROW_H + ROW_GAP)
 		Screen.CODEX:
+			if codex_tab == "notes":
+				return save.NOTE_COUNT * (NOTE_ROW_H + ROW_GAP)
 			return _codex_ids().size() * (CODEX_ROW_H + ROW_GAP)
 	return 0.0
 
@@ -278,6 +292,13 @@ func scroll_by(screen: int, amount: float) -> void:
 
 
 func tap_list(screen: int, p: Vector2) -> void:
+	if screen == Screen.COSMETICS:
+		var cosmetic_row := int((p.y - LIST_TOP + scroll) / (COSMETIC_ROW_H + ROW_GAP))
+		var items := Cosmetics.ids()
+		if p.y >= LIST_TOP and p.y <= LIST_BOTTOM and cosmetic_row >= 0 and cosmetic_row < items.size() and save.wear(items[cosmetic_row]):
+			host.on_star_raised()
+			host._apply_sky()
+		return
 	if screen == Screen.CODEX and codex_tab == "bosses" and _boss_page == "":
 		var row := int((p.y - LIST_TOP + scroll) / (CODEX_ROW_H + ROW_GAP))
 		var bosses := Bosses.ids()
@@ -322,6 +343,8 @@ func draw(screen: int) -> void:
 			_heading(t("shop"), 66.0)
 			_wallet_line(150.0)
 			_draw_milestone()
+		Screen.COSMETICS:
+			_heading(t("cosmetics"), 90.0)
 		Screen.STARS:
 			_heading(t("stars_tree"), 66.0)
 			var left := t("stars_left") % [save.star_points_left(), save.stars]
@@ -355,6 +378,8 @@ func draw_list(screen: int) -> void:
 				_draw_codex()
 		Screen.STARS:
 			_draw_star_tree()
+		Screen.COSMETICS:
+			_draw_cosmetics()
 
 
 func draw_buttons(list: Array[Dictionary], time: float) -> void:
@@ -379,6 +404,9 @@ func draw_buttons(list: Array[Dictionary], time: float) -> void:
 				host.soft_glow(rect.get_center(), rect.size * Vector2(1.5, 2.8), Color(color, 0.45 + beat * 0.35))
 				host.panel(rect.grow(beat * 4.0), color, radius + beat * 4.0, Color.WHITE, 3)
 				host.text_center(rect.get_center(), label, host.fit_size(label, 44, rect.size.x - 50.0), UI.INK)
+			"small":
+				host.panel(rect, UI.PANEL, radius, UI.LINE, 2)
+				host.text_center(rect.get_center(), label, host.fit_size(label, 22, rect.size.x - 20.0), UI.MUTED, host.font_body)
 			"tile":
 				host.panel(rect, UI.PANEL, 28.0, UI.LINE, 2)
 				PerkArt.draw_glyph(host.canvas, TITLE_GLYPHS[button["id"]], rect.get_center() + Vector2(0.0, -22.0), 32.0, UI.TEXT)
@@ -632,6 +660,34 @@ func _draw_achievements() -> void:
 			host.panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 10.0), bar.size.y)), UI.MINT if done else UI.ACCENT, 5.0)
 
 
+func _draw_cosmetics() -> void:
+	var ids := Cosmetics.ids()
+	for i in ids.size():
+		var y := LIST_TOP + i * (COSMETIC_ROW_H + ROW_GAP) - scroll
+		if y > LIST_BOTTOM or y + COSMETIC_ROW_H < LIST_TOP:
+			continue
+		var id := ids[i]
+		var unlocked: bool = save.is_cosmetic_unlocked(id)
+		var worn: bool = save.wearing(String(Cosmetics.ITEMS[id]["slot"])) == id
+		host.panel(Rect2(40.0, y, 640.0, COSMETIC_ROW_H), UI.PANEL, 22.0, UI.MINT if worn else UI.LINE, 3 if worn else 2)
+		host.text_left(Vector2(70.0, y + COSMETIC_ROW_H / 2.0), t("look_" + id) if unlocked else t("codex_unknown"), 28, UI.TEXT if unlocked else Color(UI.MUTED, 0.7))
+		if not unlocked:
+			var hint: String = t("unlock_by") % achievement_title(String(Cosmetics.ITEMS[id]["unlock"]))
+			host.text_right(Vector2(654.0, y + COSMETIC_ROW_H / 2.0), hint, host.fit_size(hint, 20, 330.0), UI.MUTED, host.font_body)
+
+
+func _draw_notes(y_start: float) -> void:
+	for i in save.NOTE_COUNT:
+		var y: float = y_start + i * (NOTE_ROW_H + ROW_GAP) - scroll
+		if y > LIST_BOTTOM or y + NOTE_ROW_H < LIST_TOP:
+			continue
+		host.panel(Rect2(40.0, y, 640.0, NOTE_ROW_H), UI.PANEL, 22.0, UI.LINE, 2)
+		var found: bool = i < int(save.notes)
+		var text: String = t("note_%d" % (i + 1)) if found else t("note_locked")
+		var flags := TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE
+		host.canvas.draw_multiline_string(host.font_body, Vector2(66.0, y + 42.0), text, HORIZONTAL_ALIGNMENT_LEFT, 590.0, 23, 4, UI.TEXT if found else Color(UI.MUTED, 0.6), flags)
+
+
 func _codex_ids() -> Array[String]:
 	match codex_tab:
 		"balls":
@@ -644,6 +700,9 @@ func _codex_ids() -> Array[String]:
 
 
 func _draw_codex() -> void:
+	if codex_tab == "notes":
+		_draw_notes(LIST_TOP)
+		return
 	var ids := _codex_ids()
 	for i in ids.size():
 		var y := LIST_TOP + i * (CODEX_ROW_H + ROW_GAP) - scroll

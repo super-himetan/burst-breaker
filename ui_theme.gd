@@ -27,6 +27,8 @@ const BLOCKS := {
 	"breeder": Color("c084fc"),
 	"extra_ball": Color("f5f3ff"),
 	"boss": Color("b3183f"),
+	"elite": Color("ffd166"),
+	"bounty": Color("fff1a8"),
 }
 
 

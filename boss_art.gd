@@ -37,6 +37,8 @@ static func draw(canvas: CanvasItem, id: String, rect: Rect2, mood: String, time
 			_tsukuyo(canvas, c, h, color, mood, time)
 		"void":
 			_void(canvas, c, h, color, mood, time)
+		"origin":
+			_origin(canvas, c, h, color, mood, time)
 
 
 static func _ellipse(center: Vector2, radius: Vector2, from := 0.0, to := TAU, steps := 40) -> PackedVector2Array:
@@ -409,3 +411,22 @@ static func _void(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: 
 			var look := Vector2(sin(time * 0.8) * h * 0.07, 0.0)
 			canvas.draw_circle(c + look, h * 0.11, Color("ff4d6d") if mood == "angry" else color)
 			canvas.draw_circle(c + look, h * 0.05, Color("07050f"))
+
+
+## The first Breaker: a figure of white light holding the same ball you do.
+static func _origin(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	var breathe := sin(time * 1.4) * h * 0.02
+	for i in 8:
+		var dir := Vector2.from_angle(i * TAU / 8.0 + time * 0.4)
+		canvas.draw_line(c + dir * h * 0.52, c + dir * h * (0.72 + sin(time * 3.0 + i) * 0.06), Color(color, 0.5), h * 0.03, true)
+	_oval(canvas, c + Vector2(0.0, h * 0.24 + breathe), Vector2(h * 0.4, h * 0.28), Color("c9c6e8"))
+	canvas.draw_circle(c + Vector2(0.0, -h * 0.1 + breathe), h * 0.3, color)
+	var visor := c + Vector2(0.0, -h * 0.12 + breathe)
+	_oval(canvas, visor, Vector2(h * 0.24, h * 0.09), Color("17122b"))
+	var glow := Color("ff4d6d") if mood == "angry" else Color("8be9fd")
+	if mood == "dead":
+		canvas.draw_line(visor + Vector2(-h * 0.14, 0.0), visor + Vector2(h * 0.14, 0.0), glow, h * 0.025, true)
+	else:
+		canvas.draw_circle(visor + Vector2(-h * 0.09, 0.0), h * 0.035, glow)
+		canvas.draw_circle(visor + Vector2(h * 0.09, 0.0), h * 0.035, glow)
+	canvas.draw_circle(c + Vector2(h * 0.56, h * 0.2 + breathe), h * 0.1, Color.WHITE)

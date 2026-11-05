@@ -17,7 +17,19 @@ const BOSSES := {
 	"homura": {"pool": 1, "hp": 0.7, "summon": 1, "minion": "", "color": "ff7a3d", "min_tier": 3},
 	"tsukuyo": {"pool": 1, "hp": 1.0, "summon": 1, "minion": "", "color": "c7cfff", "min_tier": 5},
 	"void": {"pool": 1, "hp": 1.3, "summon": 2, "minion": "", "color": "7a5cff", "min_tier": 8},
+	"origin": {"pool": 2, "hp": 1.0, "summon": 1, "minion": "", "color": "f5f3ff"},
 }
+
+
+## Who fights alongside each boss in a double battle, from difficulty 7.
+const PARTNERS := {"dokan": "gantetsu", "lumina": "chrono", "zero": "hyoga", "homura": "dokan", "tsukuyo": "mirage", "void": "zero"}
+const DUO_MIN_TIER := 7
+const DUO_CHANCE := 0.3
+## Awakened bosses are stronger versions that start showing up from this difficulty.
+const AWAKENED_MIN_TIER := 6
+const AWAKENED_CHANCE := 0.35
+const AWAKENED_HP := 1.5
+const AWAKENED_COINS := 3.0
 
 
 static func ids() -> Array[String]:

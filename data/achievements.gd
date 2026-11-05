@@ -44,10 +44,16 @@ const TRACKS := {
 	"boss_homura": [1],
 	"boss_tsukuyo": [1],
 	"boss_void": [1],
+	"boss_origin": [1],
+	"rush_clears": [1, 3, 10],
+	"notes": [1, 6, 12],
+	"awakened": [1, 5, 25],
+	"bounties": [1, 10, 50],
+	"fevers": [1, 25, 100],
 }
 
 ## Stats where the highest single value counts, instead of a running total.
-const BEST_STATS: Array[String] = ["best_combo", "best_shot", "best_tier", "stars", "shop_levels", "perks_seen", "mastery_levels"]
+const BEST_STATS: Array[String] = ["best_combo", "best_shot", "best_tier", "stars", "shop_levels", "perks_seen", "mastery_levels", "notes"]
 
 ## Which achievement unlocks each locked perk.
 const PERK_UNLOCKS := {

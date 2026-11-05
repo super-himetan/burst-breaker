@@ -15,6 +15,8 @@ const BossArt := preload("res://boss_art.gd")
 const Achievements := preload("res://data/achievements.gd")
 const Shop := preload("res://data/shop.gd")
 const RunContent := preload("res://data/run_content.gd")
+const Worlds := preload("res://data/worlds.gd")
+const Cosmetics := preload("res://data/cosmetics.gd")
 const PerkArt := preload("res://perk_art.gd")
 const UI := preload("res://ui_theme.gd")
 const BackgroundShader := preload("res://shaders/background.gdshader")
@@ -44,6 +46,12 @@ const COUNT_UP_SECONDS := 1.0
 const COUNT_UP_TICK := 0.07
 const OVERKILL_TEXT_GAP := 0.12
 const CARD_ICON_MAX := 120.0
+const WIPE_SECONDS := 0.32
+const REVEAL_SECONDS := 0.5
+const COMBO_STAGES: Array[int] = [100, 300, 1000]
+const ENDING_LINE_SECONDS := 2.6
+const STAGE_SKY_SHIFT := 0.035
+const BALL_GLYPHS := {"normal": "star", "iron": "hammer", "fire": "flame", "splitter": "fork", "blaster": "bomb", "ghost": "crosshair", "lucky": "clover", "titan": "big_ball"}
 const KIND_BORDER := 4
 const CARD_PATH_WIDTH := 96.0
 const OBSTACLE_BODY := Color("2a2845")
@@ -161,6 +169,13 @@ var music_player: AudioStreamPlayer
 var music_task := -1
 var music_pcm := PackedByteArray()
 var end_age := 0.0
+var wipe := 0.0
+var fever_glow := 0.0
+var combo_stage := 0
+var boss_crack := 0.0
+var boss_crack_pos := Vector2.ZERO
+var pending_ending := false
+var ending_age := 0.0
 var last_bumper_sound := 0.0
 var last_tick_sound := 0.0
 var last_overkill_text := 0.0
@@ -309,6 +324,10 @@ func _on_back_request() -> void:
 			_set_screen(shop_return)
 		Menus.Screen.STARS:
 			_set_screen(Menus.Screen.PRESTIGE)
+		Menus.Screen.COSMETICS:
+			_set_screen(Menus.Screen.LOADOUT)
+		Menus.Screen.ENDING:
+			_close_ending()
 		Menus.Screen.GAME:
 			if paused:
 				_set_paused(false)
@@ -323,7 +342,10 @@ func t(key: String) -> String:
 
 
 func _set_screen(next: int) -> void:
+	if next != screen:
+		wipe = WIPE_SECONDS
 	screen = next
+	_apply_sky()
 	screen_age = 0.0
 	aiming = false
 	list_active = false
@@ -349,9 +371,31 @@ func show_title_for_verify() -> void:
 	_set_screen(Menus.Screen.TITLE)
 
 
-func _start_run() -> void:
+## Chapters and stages each colour the sky, unless the player has chosen one of their own.
+func _apply_sky() -> void:
+	var worn: Array = Cosmetics.ITEMS[save.wearing("sky")]["colors"]
+	var sky: Array = worn if not worn.is_empty() else Worlds.WORLDS["wall" if screen != Menus.Screen.GAME else sim.world]["sky"]
+	var shift := sim.stage * STAGE_SKY_SHIFT if screen == Menus.Screen.GAME and worn.is_empty() else 0.0
+	background_material.set_shader_parameter("sky_a", _as_rgb((sky[0] as Color).lerp(sky[1], shift)))
+	background_material.set_shader_parameter("sky_b", _as_rgb((sky[1] as Color).lerp(sky[2], shift)))
+	background_material.set_shader_parameter("sky_c", _as_rgb((sky[2] as Color).lerp(sky[0], shift)))
+
+
+func _as_rgb(color: Color) -> Vector3:
+	return Vector3(color.r, color.g, color.b)
+
+
+func _start_run(rush := false) -> void:
 	_bank_run()
-	sim.new_run(randi(), save.run_config())
+	var config := save.run_config()
+	if rush:
+		config["rush"] = save.rush_list()
+		config["routes"] = false
+		config["true_path"] = false
+	sim.new_run(randi(), config)
+	combo_stage = 0
+	boss_crack = 0.0
+	pending_ending = false
 	run_banked = false
 	run_seconds = 0.0
 	run_new_record = false
@@ -528,6 +572,11 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
 	time += delta
 	_poll_music()
+	wipe = maxf(wipe - delta, 0.0)
+	ending_age += delta
+	fever_glow = move_toward(fever_glow, 1.0 if screen == Menus.Screen.GAME and sim.fever and sim.state == GameSim.State.SHOOT else 0.0, delta * 3.0)
+	background_material.set_shader_parameter("fever", fever_glow)
+	boss_crack = maxf(boss_crack - delta, 0.0)
 	menus.update(delta, screen)
 	var view := get_viewport_rect().size
 	y_offset = maxf((view.y - BASE_H) / 2.0, 0.0)
@@ -594,6 +643,7 @@ func _process_game(delta: float) -> void:
 	verify_stats["max_balls"] = max(int(verify_stats["max_balls"]), sim.balls.size())
 	_consume_events()
 	_note_offered_perks()
+	_maybe_start_ending()
 	if is_run_over():
 		_bank_run()
 
@@ -695,6 +745,30 @@ func _process_count_up(delta: float) -> void:
 func _counted(value: int) -> int:
 	var k := clampf(end_age / COUNT_UP_SECONDS, 0.0, 1.0)
 	return int(value * (1.0 - pow(1.0 - k, 3.0)))
+
+
+func _maybe_start_ending() -> void:
+	if not pending_ending or boss_down > 0.0:
+		return
+	pending_ending = false
+	save.true_ending_seen = true
+	save.save_file()
+	ending_age = 0.0
+	_set_screen(Menus.Screen.ENDING)
+
+
+func _close_ending() -> void:
+	# Back to the results of the run that got here.
+	_set_screen(Menus.Screen.GAME)
+
+
+func _save_card() -> void:
+	var folder := "user://cards"
+	DirAccess.make_dir_recursive_absolute(folder)
+	var path := folder.path_join("%d.png" % int(Time.get_unix_time_from_system()))
+	get_viewport().get_texture().get_image().save_png(path)
+	toasts.append({"text": t("card_saved"), "t": 0.0})
+	_play("win", 1.6)
 
 
 func _begin_burst() -> void:
@@ -998,6 +1072,15 @@ func _press_button(id: String) -> void:
 				_set_screen(Menus.Screen.LOADOUT)
 		"go", "restart":
 			_start_run()
+		"rush":
+			if save.can_rush():
+				_start_run(true)
+		"cosmetics":
+			_set_screen(Menus.Screen.COSMETICS)
+		"save_card":
+			_save_card()
+		"ending_close":
+			_close_ending()
 		"shop":
 			shop_return = screen
 			_set_screen(Menus.Screen.SHOP)
@@ -1022,6 +1105,8 @@ func _press_button(id: String) -> void:
 					_set_screen(shop_return)
 				Menus.Screen.STARS:
 					_set_screen(Menus.Screen.PRESTIGE)
+				Menus.Screen.COSMETICS:
+					_set_screen(Menus.Screen.LOADOUT)
 				_:
 					_set_screen(Menus.Screen.TITLE)
 		"lang_ja", "lang_en":
@@ -1066,6 +1151,7 @@ func current_buttons() -> Array[Dictionary]:
 		list.append(_button("restart", Rect2(70.0, 930.0, 580.0, 120.0), t("retry"), "primary"))
 		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop")))
 		list.append(_button("to_title", Rect2(368.0, 1066.0, 282.0, 100.0), t("to_title")))
+		list.append(_button("save_card", Rect2(230.0, 876.0, 260.0, 44.0), t("save_card"), "small"))
 	elif sim.state == GameSim.State.ROUTE:
 		pass
 	elif sim.state == GameSim.State.EVENT:
@@ -1155,6 +1241,10 @@ func _consume_events() -> void:
 					_show_banner(I18n.format_number(e["damage"]), 1.2)
 			"stage_start":
 				tension_left = TENSION_SECONDS
+				_apply_sky()
+				if int(e["stage"]) == 0 and not e["boss"] and sim.world != "wall":
+					_show_banner(t("world_" + sim.world), 1.2)
+					continue
 				if e["boss"]:
 					_begin_boss_intro(e["boss_id"])
 				else:
@@ -1172,7 +1262,33 @@ func _consume_events() -> void:
 				_play("win", 1.0)
 				trauma = minf(trauma + 0.5, 1.0)
 				screen_flash = 0.5
+				# The whole field's takings rush to the counter at once.
+				for i in 26:
+					if fly_coins.size() < 80:
+						fly_coins.append({"pos": Vector2(randf_range(80.0, 640.0), randf_range(200.0, 900.0)), "vel": Vector2.from_angle(randf() * TAU) * randf_range(100.0, 500.0), "t": 0.0})
+			"fever":
+				_show_banner(t("fever"), 1.1)
+				screen_flash = maxf(screen_flash, 0.5)
+				_play("win", 1.9)
+			"jackpot":
+				_show_banner(t("jackpot"), 1.3)
+				toasts.append({"text": "+" + I18n.format_number(e["coins"]), "t": 0.0})
+				_play("win", 2.0)
+				for i in 40:
+					if fly_coins.size() < 80:
+						fly_coins.append({"pos": Vector2(BASE_W / 2.0, 500.0), "vel": Vector2.from_angle(randf() * TAU) * randf_range(200.0, 900.0), "t": 0.0})
+			"bounty":
+				_show_banner(t("bounty_banner"), 1.0)
+				_play("charge", 1.7)
+			"bounty_escaped":
+				toasts.append({"text": t("bounty_escaped"), "t": 0.0})
+			"note":
+				if save.add_note():
+					toasts.append({"text": t("note_toast") % save.notes, "t": 0.0})
+					save.save_file()
 			"won":
+				if sim.boss_id() == "" and int(sim.counters.get("boss_origin", 0)) > 0:
+					pending_ending = true
 				_play("win", 1.25)
 				trauma = 1.0
 				screen_flash = 0.8
@@ -1207,6 +1323,13 @@ func _on_hit(e: Dictionary) -> void:
 		return
 	_spawn_particles(e["pos"], _combo_color(combo), 2, 150.0)
 	combo_pop = 1.0
+	# Long chains climb through stages, each with its own burst of light.
+	if combo_stage < COMBO_STAGES.size() and combo >= COMBO_STAGES[combo_stage]:
+		combo_stage += 1
+		rings.append({"pos": e["pos"], "t": 0.0, "size": 200.0 + combo_stage * 120.0})
+		impact = maxf(impact, 0.012 * combo_stage)
+	if combo < 2:
+		combo_stage = 0
 	if time - last_hit_sound > 0.03:
 		last_hit_sound = time
 		# Climb a pentatonic scale with the combo so long chains audibly rise.
@@ -1242,6 +1365,8 @@ func _on_kill(e: Dictionary) -> void:
 		boss_down = BOSS_DOWN_HOLD
 		boss_down_id = e["boss_id"]
 		boss_down_pos = e["pos"]
+		boss_crack = BOSS_DOWN_HOLD
+		boss_crack_pos = e["pos"]
 		_say("boss_%s_defeat" % boss_down_id, true)
 		_show_banner(t("boss_down") % t("boss_%s_name" % boss_down_id), BOSS_DOWN_HOLD)
 	if time - last_pop_sound > 0.025:
@@ -1392,6 +1517,7 @@ func _draw() -> void:
 	_draw_obstacles()
 	_draw_blocks()
 	_draw_boss_down()
+	_draw_boss_crack()
 	_draw_balls()
 	_draw_launcher()
 	if (aiming or hovering) and sim.state == GameSim.State.AIM and not paused:
@@ -1429,6 +1555,22 @@ func _draw_boss_down() -> void:
 	draw_set_transform(Vector2.ZERO)
 
 
+## The screen itself cracks around the killing blow.
+func _draw_boss_crack() -> void:
+	if boss_crack <= 0.0:
+		return
+	var k := boss_crack / BOSS_DOWN_HOLD
+	var color := Color(1.0, 1.0, 1.0, k * 0.85)
+	for i in 9:
+		var dir := Vector2.from_angle(i * TAU / 9.0 + float(i * i) * 0.4)
+		var a := boss_crack_pos
+		var reach := 90.0 + float((i * 37) % 170)
+		for part in 3:
+			var b := a + dir.rotated(sin(float(i + part) * 2.1) * 0.5) * reach * (1.0 - k * 0.2) / 2.0
+			canvas.draw_line(a, b, color, 4.0 - part, true)
+			a = b
+
+
 func _draw_danger_line() -> void:
 	var y := GameSim.FIELD_Y + sim.death_row * GameSim.CELL_H
 	var close := 1.0 - clampf((sim.death_row - sim._lowest_row() - 1) / 4.0, 0.0, 1.0)
@@ -1457,10 +1599,11 @@ func _draw_glow() -> void:
 		var color: Color = ball_color.lerp(UI.STAR, 0.7) if ball.temp else ball_color
 		# The tail grows and takes on the combo's colour as a shot heats up.
 		var length := TRAIL_BASE + radius * 2.0 + minf(sim.combo * TRAIL_PER_COMBO, TRAIL_MAX_EXTRA)
-		var trail_color := color.lerp(_combo_color(sim.combo), minf(sim.combo / TRAIL_COLOR_FULL_COMBO, 0.85))
+		var trail_color := _trail_color(color.lerp(_combo_color(sim.combo), minf(sim.combo / TRAIL_COLOR_FULL_COMBO, 0.85)), sim.balls.find(ball))
 		var back: Vector2 = -ball.vel.normalized() * length
-		glow_layer.draw_line(ball.pos + back, ball.pos + back * 0.45, Color(trail_color, 0.14), radius * 0.9)
-		glow_layer.draw_line(ball.pos + back * 0.45, ball.pos, Color(trail_color, 0.34), radius * 1.4)
+		if trail_color.a > 0.0:
+			glow_layer.draw_line(ball.pos + back, ball.pos + back * 0.45, Color(trail_color, 0.14), radius * 0.9)
+			glow_layer.draw_line(ball.pos + back * 0.45, ball.pos, Color(trail_color, 0.34), radius * 1.4)
 		_glow_sprite(ball.pos, radius * 5.0, Color(color, 0.42))
 	for block in sim.unique_blocks():
 		if block["kind"] == "bomb" or block["kind"] == "treasure":
@@ -1537,10 +1680,38 @@ func _draw_ui() -> void:
 	else:
 		menus.draw(screen)
 	menus.draw_buttons(current_buttons(), time)
+	if screen == Menus.Screen.ENDING:
+		_draw_ending()
 	for dot in _pending_dots:
 		soft_glow(dot["pos"], Vector2(70.0, 70.0), Color(dot["color"], 0.5))
 		ui_layer.draw_circle(dot["pos"], 13.0, dot["color"])
 	_draw_toast()
+	_draw_wipe()
+
+
+## A slanted band of ink sweeps across whenever the screen changes.
+func _draw_wipe() -> void:
+	if wipe <= 0.0:
+		return
+	var k := 1.0 - wipe / WIPE_SECONDS
+	var view := get_viewport_rect().size
+	var lead := (k * 2.0 - 0.3) * (view.x + 500.0) - 250.0
+	var tail := lead - (view.x + 500.0) * 0.6
+	var top := -y_offset - 20.0
+	var bottom := view.y - y_offset + 20.0
+	canvas.draw_colored_polygon(PackedVector2Array([Vector2(tail + 220.0, top), Vector2(lead + 220.0, top), Vector2(lead - 220.0, bottom), Vector2(tail - 220.0, bottom)]), UI.INK)
+
+
+func _draw_ending() -> void:
+	fill_screen(Color(UI.INK, minf(ending_age, 1.0)))
+	var lines := 8
+	for i in lines:
+		var since := ending_age - i * ENDING_LINE_SECONDS * 0.5
+		if since <= 0.0:
+			break
+		var line := t("ending_%d" % (i + 1))
+		var alpha := minf(since, 1.0)
+		text_center(Vector2(BASE_W / 2.0, 220.0 + i * 88.0), line, fit_size(line, 30, 640.0), Color(UI.TEXT, alpha), font_body)
 
 
 func _draw_list() -> void:
@@ -1760,6 +1931,10 @@ func _draw_burst_cut_in() -> void:
 	var creep := (0.5 - k) * 40.0
 	text_center(Vector2(BASE_W / 2.0 + slide + creep, center_y - 66.0), t("burst"), 26, UI.INK, font_label)
 	text_center(Vector2(BASE_W / 2.0 + slide - creep, center_y + 18.0), name_text, fit_size(name_text, 96, 650.0), UI.INK)
+	# Each ball's emblem sweeps behind its move's name.
+	for i in 5:
+		var emblem := Vector2(BASE_W * (i + 0.5) / 5.0 + slide + creep * (i - 2), center_y + 92.0)
+		PerkArt.draw_glyph(canvas, BALL_GLYPHS[sim.ball_type], emblem, 18.0, Color(UI.INK, 0.45))
 
 
 ## Furniture is dark and flat, so it never reads as something to break.
@@ -1812,6 +1987,9 @@ func _draw_blocks() -> void:
 		if kind == "boss":
 			_draw_boss(block, rect)
 			continue
+		if block.has("ally_id"):
+			_draw_ally(block, rect)
+			continue
 		var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
 		# A struck block swells for a moment, so every hit has weight.
 		var drawn := rect.grow(hit * 3.0)
@@ -1820,6 +1998,8 @@ func _draw_blocks() -> void:
 		_draw_block_body(kind, drawn, body, _block_border(block), shape)
 		if block.has("post"):
 			_draw_block_outline(drawn, shape, Color("8be9fd"), 3.0)
+		if block.has("element"):
+			canvas.draw_circle(rect.position + Vector2(rect.size.x / 2.0, 7.0), 5.0, Worlds.ELEMENT_COLORS[block["element"]])
 		if int(block["poison"]) > 0:
 			canvas.draw_circle(rect.get_center() + Vector2(-9.0, -rect.size.y * 0.22), 5.0, Color("2f9e44"))
 		if block["burning"]:
@@ -1869,6 +2049,23 @@ func _draw_block_body(kind: String, rect: Rect2, color: Color, border := Color.T
 		"extra_ball":
 			canvas.draw_circle(c, 13.0, UI.INK)
 			canvas.draw_circle(c, 8.0, Color.WHITE)
+		"elite":
+			PerkArt.draw_glyph(canvas, "crown", c, 15.0, UI.INK)
+		"bounty":
+			canvas.draw_circle(c, 15.0, UI.INK)
+			canvas.draw_circle(c, 10.0, UI.GOLD)
+			canvas.draw_rect(Rect2(c + Vector2(-2.0, -6.0), Vector2(4.0, 12.0)), UI.INK)
+
+
+func _draw_ally(block: Dictionary, rect: Rect2) -> void:
+	var id: String = block["ally_id"]
+	var color := Bosses.color(id)
+	panel(rect, color.darkened(0.72), 22.0, Color(color, 0.8), 3)
+	var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
+	BossArt.draw(canvas, id, Rect2(rect.position + Vector2(0.0, -4.0), Vector2(rect.size.x, rect.size.y - 22.0)), "hurt" if hit > 0.25 else "idle", time)
+	var bar := Rect2(rect.position + Vector2(14.0, rect.size.y - 22.0), Vector2(rect.size.x - 28.0, 14.0))
+	panel(bar, Color(0.0, 0.0, 0.0, 0.62), 7.0)
+	panel(Rect2(bar.position, Vector2(maxf(bar.size.x * float(block["hp"]) / float(block["max_hp"]), 10.0), bar.size.y)), UI.GOLD, 7.0)
 
 
 func _draw_block_outline(rect: Rect2, shape: String, color: Color, width: float) -> void:
@@ -1889,6 +2086,8 @@ func draw_block_icon(kind: String, rect: Rect2) -> void:
 	if kind in ["wall", "mover", "bumper", "ramp_l", "portal"]:
 		_draw_obstacle(kind, rect, 0.0)
 		return
+	if kind.begins_with("skin_") or kind.begins_with("trail_") or kind.begins_with("sky_"):
+		return
 	if kind in ["round", "hex", "diamond", "tri_up", "pill"]:
 		_draw_block_body("normal", rect, UI.RAMP[1], Color.TRANSPARENT, kind)
 		return
@@ -1908,6 +2107,9 @@ func _draw_boss(block: Dictionary, rect: Rect2) -> void:
 	if angry:
 		plate = plate.lerp(UI.DANGER.darkened(0.45), 0.5 + sin(time * 9.0) * 0.3)
 	panel(rect, plate, 22.0, Color(color, 0.8), 3)
+	if block.get("awakened", false):
+		var flare := 0.5 + sin(time * 6.0) * 0.5
+		panel(rect.grow(6.0 + flare * 4.0), Color(UI.DANGER, 0.08), 28.0, Color(UI.DANGER, 0.6 + flare * 0.4), 4)
 	# The whole character jolts when struck, so even small hits feel like they land.
 	var jolt := Vector2(sin(time * 70.0), 0.0) * hit * 5.0
 	var mood := "hurt" if hit > 0.25 else ("angry" if angry else "idle")
@@ -1926,7 +2128,7 @@ func _draw_boss(block: Dictionary, rect: Rect2) -> void:
 ## Colour is the health readout: the hotter the block, the more it still takes to break.
 func _block_color(block: Dictionary) -> Color:
 	var size: Vector2i = block["size"]
-	var top: float = float(GameSim.STAGES[sim.stage]["hp_max"]) * GameSim.Tiers.hp_scale(sim.tier) * size.x * size.y
+	var top: float = float(sim.stage_cfg()["hp_max"]) * GameSim.Tiers.hp_scale(sim.tier) * size.x * size.y
 	return UI.ramp(float(block["hp"]) / top)
 
 
@@ -1941,7 +2143,29 @@ func _combo_color(combo: int) -> Color:
 
 
 func _ball_color() -> Color:
-	return Color(String(Balls.BALLS[sim.ball_type]["color"]))
+	var override := String(Cosmetics.ITEMS[save.wearing("skin")]["color"])
+	return Color(override) if override != "" else Color(String(Balls.BALLS[sim.ball_type]["color"]))
+
+
+func _draw_ball_shape(pos: Vector2, radius: float, color: Color) -> void:
+	match String(Cosmetics.ITEMS[save.wearing("skin")]["shape"]):
+		"star":
+			PerkArt.draw_glyph(canvas, "star", pos, radius * 1.5, color)
+		"diamond":
+			canvas.draw_colored_polygon(PackedVector2Array([pos + Vector2(0.0, -radius * 1.3), pos + Vector2(radius * 1.3, 0.0), pos + Vector2(0.0, radius * 1.3), pos + Vector2(-radius * 1.3, 0.0)]), color)
+		_:
+			canvas.draw_circle(pos, radius, color)
+
+
+func _trail_color(base: Color, index: int) -> Color:
+	match String(Cosmetics.ITEMS[save.wearing("trail")]["mode"]):
+		"none":
+			return Color.TRANSPARENT
+		"ember":
+			return Color("ff9a3d").lerp(Color("ff4d6d"), 0.5 + sin(time * 8.0 + index) * 0.5)
+		"rainbow":
+			return Color.from_hsv(fmod(time * 0.8 + index * 0.05, 1.0), 0.7, 1.0)
+	return base
 
 
 func _draw_balls() -> void:
@@ -1950,7 +2174,7 @@ func _draw_balls() -> void:
 	var heated := base.lerp(_combo_color(sim.combo), minf(sim.combo / TRAIL_COLOR_FULL_COMBO, 0.5))
 	for ball in sim.balls:
 		var color: Color = heated.lerp(UI.STAR, 0.5) if ball.temp else heated
-		canvas.draw_circle(ball.pos, radius, color)
+		_draw_ball_shape(ball.pos, radius, color)
 
 
 func _draw_companion() -> void:
@@ -1968,7 +2192,7 @@ func _draw_launcher() -> void:
 	var color := _ball_color()
 	var breathe := 1.0 + sin(time * 4.0) * 0.08
 	soft_glow(p, Vector2(110.0, 110.0) * breathe, Color(color, 0.4))
-	canvas.draw_circle(p, sim.ball_radius + 3.0, color)
+	_draw_ball_shape(p, sim.ball_radius + 3.0, color)
 	text_center(p + Vector2(0.0, 44.0), "x%d" % sim.shot_ball_count(), 26, UI.TEXT)
 	if sim.guards > 0:
 		for i in sim.guards:
@@ -2016,12 +2240,12 @@ func _draw_hud() -> void:
 
 ## The run as a line of dots, with a diamond for each boss.
 func _draw_stage_pips(start: Vector2) -> void:
-	for i in GameSim.STAGES.size():
+	for i in sim.stage_total():
 		var c := start + Vector2(i * STAGE_PIP_SPACING, 0.0)
 		var color := UI.ACCENT if i == sim.stage else (UI.TEXT if i < sim.stage else Color(UI.MUTED, 0.3))
 		if i == sim.stage:
 			soft_glow(c, Vector2(44.0, 44.0), Color(UI.ACCENT, 0.5))
-		if (GameSim.STAGES[i] as Dictionary).has("boss"):
+		if sim.is_boss_stage(i):
 			canvas.draw_colored_polygon(PackedVector2Array([c + Vector2(0.0, -10.0), c + Vector2(10.0, 0.0), c + Vector2(0.0, 10.0), c + Vector2(-10.0, 0.0)]), color)
 		else:
 			canvas.draw_circle(c, 6.0, color)
@@ -2069,6 +2293,16 @@ func _draw_upgrade_screen() -> void:
 ## One card reads left to right: what it is, what it does, and where it leads.
 func _draw_card(id: String, rect: Rect2, alpha: float) -> void:
 	var perk: Dictionary = Perks.PERKS[id]
+	# The rarest cards turn over in front of you.
+	if int(perk["rarity"]) == Perks.LEGENDARY and not Perks.is_evolution(id) and screen_age < REVEAL_SECONDS:
+		var flip := absf(cos(screen_age / REVEAL_SECONDS * PI))
+		var center := rect.get_center()
+		var narrow := Rect2(center - Vector2(rect.size.x * flip / 2.0, rect.size.y / 2.0), Vector2(rect.size.x * flip, rect.size.y))
+		if screen_age < REVEAL_SECONDS / 2.0:
+			panel(narrow, Color(UI.GOLD, 0.92 * alpha), 30.0, Color.WHITE, 3)
+			soft_glow(center, rect.size * 1.4, Color(UI.GOLD, 0.5 * alpha))
+			return
+		rect = narrow
 	var color: Color = UI.RARITY[int(perk["rarity"])]
 	var evolution := Perks.is_evolution(id)
 	if evolution:
@@ -2243,7 +2477,7 @@ func _draw_end_screen(title: String, color: Color) -> void:
 	var coin_text := "+" + I18n.format_number(_counted(sim.coins))
 	canvas.draw_circle(Vector2(BASE_W / 2.0 + 44.0, 508.0), 15.0, UI.GOLD)
 	text_left(Vector2(BASE_W / 2.0 + 70.0, 508.0), coin_text, 46, UI.GOLD)
-	_draw_stage_pips(Vector2(BASE_W / 2.0 - (GameSim.STAGES.size() - 1) * STAGE_PIP_SPACING / 2.0, 568.0))
+	_draw_stage_pips(Vector2(BASE_W / 2.0 - (sim.stage_total() - 1) * STAGE_PIP_SPACING / 2.0, 568.0))
 	_draw_next_unlock(Rect2(110.0, 610.0, 500.0, 70.0))
 	_draw_build(708.0, 3)
 

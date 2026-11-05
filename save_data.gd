@@ -8,9 +8,13 @@ const Perks := preload("res://data/perks.gd")
 const Shop := preload("res://data/shop.gd")
 const StarTree := preload("res://data/star_tree.gd")
 const RunContent := preload("res://data/run_content.gd")
+const Bosses := preload("res://data/bosses.gd")
+const Worlds := preload("res://data/worlds.gd")
+const Cosmetics := preload("res://data/cosmetics.gd")
 
 const DEFAULT_PATH := "user://save.json"
 const VOLUME_MAX := 10
+const NOTE_COUNT := 12
 const COINS_PER_STAR_SQUARED := 6000.0
 ## Experience for simply reaching a stage, and the extra for clearing the run.
 const WIN_XP := 8
@@ -45,6 +49,9 @@ var star_nodes := {}
 var mastery := {}
 var pilot := "rookie"
 var contract := "none"
+var notes := 0
+var worn := {}
+var true_ending_seen := false
 
 
 func _init(save_path := DEFAULT_PATH) -> void:
@@ -93,6 +100,14 @@ func load_file() -> void:
 	pilot = saved_pilot if RunContent.PILOTS.has(saved_pilot) else "rookie"
 	var saved_contract := String(data.get("contract", contract))
 	contract = saved_contract if RunContent.CONTRACTS.has(saved_contract) else "none"
+	notes = clampi(int(data.get("notes", notes)), 0, NOTE_COUNT)
+	true_ending_seen = bool(data.get("true_ending_seen", true_ending_seen))
+	worn = {}
+	var saved_worn: Variant = data.get("worn", {})
+	if saved_worn is Dictionary:
+		for slot: Variant in saved_worn:
+			if Cosmetics.ITEMS.has(saved_worn[slot]):
+				worn[String(slot)] = String(saved_worn[slot])
 
 
 ## JSON turns every number into a float, and a damaged entry should not break the save.
@@ -166,6 +181,9 @@ func save_file() -> bool:
 		"mastery": mastery,
 		"pilot": pilot,
 		"contract": contract,
+		"notes": notes,
+		"worn": worn,
+		"true_ending_seen": true_ending_seen,
 	}, "  "))
 	file.close()
 	return DirAccess.rename_absolute(tmp, path) == OK
@@ -187,6 +205,8 @@ func run_config(emit_events := true) -> Dictionary:
 		"star_nodes": star_nodes,
 		"mastery": mastery_level(ball_type),
 		"routes": true,
+		"world": pick_world(),
+		"true_path": has_beaten_every_boss(),
 		"missions": true,
 		"pilot": pilot,
 		"contract": contract,
@@ -210,6 +230,57 @@ func is_perk_unlocked(id: String) -> bool:
 	if not Perks.starts_locked(id):
 		return true
 	return has_achievement(Achievements.locks_for_perk(id))
+
+
+func pick_world() -> String:
+	var open := Worlds.open_at(tier)
+	return open[randi() % open.size()]
+
+
+## Everyone but the one waiting at the end of it all.
+func has_beaten_every_boss() -> bool:
+	for id in Bosses.ids():
+		if int(Bosses.BOSSES[id]["pool"]) < 2 and stat_value("boss_" + id) <= 0:
+			return false
+	return true
+
+
+func can_rush() -> bool:
+	return wins > 0
+
+
+## Every boss the player has met, weakest pool first, for the boss rush.
+func rush_list() -> Array[String]:
+	var list: Array[String] = []
+	for pool in 2:
+		for id in Bosses.in_pool(pool, 999):
+			if bosses_met.has(id):
+				list.append(id)
+	return list
+
+
+func add_note() -> bool:
+	if notes >= NOTE_COUNT:
+		return false
+	notes += 1
+	lifetime["notes"] = notes
+	return true
+
+
+func is_cosmetic_unlocked(id: String) -> bool:
+	var unlock := String(Cosmetics.ITEMS[id]["unlock"])
+	return unlock == "" or has_achievement(unlock)
+
+
+func wearing(slot: String) -> String:
+	return String(worn.get(slot, Cosmetics.DEFAULTS[slot]))
+
+
+func wear(id: String) -> bool:
+	if not is_cosmetic_unlocked(id):
+		return false
+	worn[String(Cosmetics.ITEMS[id]["slot"])] = id
+	return true
 
 
 func is_pilot_unlocked(id: String) -> bool:

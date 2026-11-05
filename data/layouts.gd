@@ -12,7 +12,7 @@ const LAYOUTS := {
 		[["bumper", 2, 7], ["bumper", 4, 7], ["bumper", 3, 9]],
 	],
 	2: [
-		[["wall", 2, 8], ["wall", 3, 8], ["wall", 4, 8], ["ramp_l", 1, 8], ["ramp_r", 5, 8]],
+		[["wall", 2, 8], ["wall", 3, 8], ["wall", 4, 8], ["ramp_r", 1, 8], ["ramp_l", 5, 8]],
 		[["wall", 1, 7], ["wall", 1, 8], ["wall", 5, 7], ["wall", 5, 8], ["bumper", 3, 8]],
 	],
 	4: [
@@ -22,7 +22,7 @@ const LAYOUTS := {
 	],
 	5: [
 		[["mover", 1, 7], ["mover", 4, 7], ["wall", 0, 6], ["wall", 6, 6], ["bumper", 3, 9]],
-		[["portal", 0, 9], ["portal", 6, 6], ["ramp_l", 2, 7], ["ramp_r", 4, 7], ["wall", 3, 7], ["bumper", 3, 9]],
+		[["portal", 0, 9], ["portal", 6, 6], ["ramp_r", 2, 7], ["ramp_l", 4, 7], ["wall", 3, 7], ["bumper", 3, 9]],
 	],
 	6: [
 		[["wall", 0, 6], ["wall", 1, 6], ["wall", 2, 6], ["wall", 4, 8], ["wall", 5, 8], ["wall", 6, 8], ["mover", 3, 10], ["bumper", 1, 9]],

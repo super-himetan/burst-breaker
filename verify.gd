@@ -40,6 +40,7 @@ func run() -> void:
 	await _verify_play()
 	await _verify_end()
 	await _verify_specials()
+	await _verify_extras(host.sim)
 	await _verify_meta_screens()
 	await _verify_english()
 	var ok := true
@@ -298,6 +299,55 @@ func _verify_obstacles(sim: GameSim) -> void:
 	_check("shot_ends_among_obstacles", sim.state != GameSim.State.SHOOT)
 
 
+## Reaches the rest of the endgame the way a player would: through the real buttons.
+func _verify_extras(sim: GameSim) -> void:
+	var save: SaveData = host.save
+	save.wins = maxi(save.wins, 1)
+	await _tap_button("start")
+	await _tap_button("cosmetics")
+	_check("looks_open", host.screen == Menus.Screen.COSMETICS)
+	await _shot("44_looks_ja")
+	await _tap_at(Vector2(360.0, Menus.LIST_TOP + 40.0))
+	await _tap_button("back")
+	_check("looks_back_to_loadout", host.screen == Menus.Screen.LOADOUT)
+	await _shot("45_loadout_full_ja")
+	await _tap_button("rush")
+	_check("rush_starts", not host.sim.rush.is_empty())
+	await _wait_until(func() -> bool: return host.boss_intro >= 0.0, 2000)
+	await _touch_skip()
+	await _shot("46_rush_ja")
+	await _wait(0.2)
+	host._bank_run()
+	host.sim.state = GameSim.State.LOST
+	await _wait(0.4)
+	await _tap_button("to_title")
+	# The true ending.
+	host.save.bosses_met["dokan"] = true
+	await _tap_button("start")
+	await _tap_button("go")
+	host.sim.true_path = true
+	host.sim.stage = GameSim.STAGES.size()
+	host.sim.boss_force = "origin"
+	host.sim._start_stage()
+	await _wait_until(func() -> bool: return host.boss_intro >= 1.1, 4000)
+	await _shot("47_origin_intro_ja")
+	await _touch_skip()
+	await _wait(0.3)
+	await _shot("48_origin_field_ja")
+	host.sim._damage_block((host.sim.boss_block as Dictionary)["origin"], 1.0e9)
+	host.sim.state = GameSim.State.SHOOT
+	await _wait_until(func() -> bool: return host.screen == Menus.Screen.ENDING, 8000)
+	_check("true_ending_plays", host.screen == Menus.Screen.ENDING)
+	await _wait(7.0)
+	await _shot("49_ending_ja")
+	await _tap_button("ending_close")
+	_check("ending_returns_to_results", host.screen == Menus.Screen.GAME and host.is_run_over())
+	await _wait(1.3)
+	await _shot("50_results_after_ending_ja")
+	await _tap_button("save_card")
+	await _tap_button("to_title")
+
+
 func _verify_boss_cast(sim: GameSim) -> void:
 	for id in Bosses.ids():
 		sim.state = GameSim.State.AIM
@@ -426,6 +476,9 @@ func _verify_meta_screens() -> void:
 	await _shot("16_codex_balls_ja")
 	await _tap_button("tab_blocks")
 	await _shot("17_codex_blocks_ja")
+	save.notes = 2
+	await _tap_button("tab_notes")
+	await _shot("17a_codex_notes_ja")
 	await _tap_button("tab_bosses")
 	await _shot("17b_codex_bosses_ja")
 	await _wait(0.4)

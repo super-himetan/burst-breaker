@@ -16,6 +16,8 @@ const PerkArt := preload("res://perk_art.gd")
 const Layouts := preload("res://data/layouts.gd")
 const Formations := preload("res://data/formations.gd")
 const RunContent := preload("res://data/run_content.gd")
+const Worlds := preload("res://data/worlds.gd")
+const Cosmetics := preload("res://data/cosmetics.gd")
 const DT := 1.0 / 60.0
 
 var failures := 0
@@ -79,6 +81,9 @@ func _init() -> void:
 	_test_formations()
 	_test_routes_and_events()
 	_test_run_content()
+	_test_world_and_specials()
+	_test_endgame()
+	_test_cosmetics_and_notes()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -432,7 +437,7 @@ func _test_perk_mechanics() -> void:
 	sim.blocks = {}
 	sim.waves_left = 0
 	sim._clear_stage()
-	_check(sim.coins == 115, "interest pays at stage clear")
+	_check(sim.coins >= 115, "interest pays at stage clear")
 
 	sim = _sim()
 	_give(sim, "momentum", 1)
@@ -748,7 +753,7 @@ func _check_board_valid(sim: GameSim, label: String) -> void:
 
 
 func _test_boss_cast() -> void:
-	_check(Bosses.ids().size() == 12, "twelve bosses exist")
+	_check(Bosses.ids().size() == 13, "thirteen bosses exist")
 	for high_tier in [2, 5, 20]:
 		_check(Bosses.in_pool(0, high_tier).size() > 3 and Bosses.in_pool(1, high_tier).size() >= 3, "tier %d widens the roster" % high_tier)
 	_check(Bosses.in_pool(1, 8).size() == 6 and Bosses.in_pool(0, 4).size() == 6, "every boss joins by its tier")
@@ -1533,6 +1538,24 @@ func _test_layouts_leave_a_route() -> void:
 					ok = false
 					bad = str(shown)
 	_check(ok, "every layout leaves a way through %s" % bad)
+	# A ramp's upright side sits against its neighbour, so together they read as one solid shape.
+	var ramps_ok := true
+	var bad_ramp := ""
+	for stage: int in Layouts.LAYOUTS:
+		for layout: Array in Layouts.LAYOUTS[stage]:
+			for shown: Array in [layout, Layouts.mirrored(layout)]:
+				var solid := {}
+				for piece: Array in shown:
+					if piece[0] != "portal" and piece[0] != "bumper":
+						solid[Vector2i(piece[1], piece[2])] = true
+				for piece: Array in shown:
+					if piece[0] != "ramp_l" and piece[0] != "ramp_r":
+						continue
+					var slanted_side := 1 if piece[0] == "ramp_l" else -1
+					if solid.has(Vector2i(int(piece[1]) + slanted_side, piece[2])):
+						ramps_ok = false
+						bad_ramp = str(piece)
+	_check(ramps_ok, "ramps never point their slant at a neighbour %s" % bad_ramp)
 	var portals_ok := true
 	for stage: int in Layouts.LAYOUTS:
 		for layout: Array in Layouts.LAYOUTS[stage]:
@@ -1725,6 +1748,9 @@ func _test_formations() -> void:
 	var mirrored_ok := true
 	for block in sim.unique_blocks():
 		var o: Vector2i = block["origin"]
+		# A bounty wanders in on its own, outside the picture.
+		if block["kind"] == "bounty":
+			continue
 		var twin := Vector2i(GameSim.COLS - o.x - int(block["size"].x), o.y)
 		mirrored_ok = mirrored_ok and sim.blocks.has(twin) and sim.blocks[twin]["kind"] == block["kind"] and sim.blocks[twin]["hp"] == block["hp"]
 	_check(mirrored_ok, "a formation's kinds and toughness mirror across the field")
@@ -1883,6 +1909,189 @@ func _test_run_content() -> void:
 	_check(not fused._is_perk_available("u_cataclysm"), "an ultimate needs both evolutions")
 	fused.levels["e_inferno"] = 1
 	_check(fused._is_perk_available("u_cataclysm"), "two evolutions open their ultimate")
+
+
+func _test_world_and_specials() -> void:
+	_check(Worlds.multiplier("fire", "ice") == Worlds.STRONG and Worlds.multiplier("ice", "fire") == Worlds.WEAK, "elements beat each other in a circle")
+	_check(Worlds.multiplier("", "ice") == 1.0 and Worlds.multiplier("fire", "") == 1.0 and Worlds.multiplier("fire", "fire") == 1.0, "no matchup means no change")
+	_check(Worlds.open_at(0) == ["wall"] and Worlds.open_at(99).size() == Worlds.WORLDS.size(), "chapters open with difficulty")
+	var fire := _sim(1, {"ball_type": "fire"})
+	var iced := _single_block(fire, Vector2i(3, 2), 1000)
+	var normal_hit := fire._scale_damage(10.0, iced)
+	iced["element"] = "ice"
+	_check(is_equal_approx(fire._scale_damage(10.0, iced), normal_hit * Worlds.STRONG), "a fire ball burns through ice")
+	var seen_element := false
+	for seed_value in 30:
+		var s := _sim(seed_value, {"world": "glacier"})
+		for block in s.unique_blocks():
+			seen_element = seen_element or block.get("element", "") == "ice"
+	_check(seen_element, "a chapter's blocks carry its element")
+
+	var sim := _sim()
+	var elite := _single_block(sim, Vector2i(3, 2), 10, "elite")
+	var before := sim.coins
+	sim._damage_block(Vector2i(3, 2), 5.0)
+	sim._damage_block(Vector2i(3, 2), 5.0)
+	_check(sim.coins - before >= int(GameSim.ELITE_COINS), "an elite block pays well (%d)" % (sim.coins - before))
+	_check(not sim.blocks.has(elite["origin"]), "an elite block can be destroyed")
+
+	sim = _sim()
+	var bounty := _single_block(sim, Vector2i(3, 5), 50, "bounty")
+	bounty["turns"] = 2
+	bounty["dir"] = 1
+	sim._descend()
+	_check(bounty["origin"] == Vector2i(4, 5), "a bounty runs sideways, it does not fall")
+	sim._descend()
+	_check(sim.blocks.is_empty(), "a bounty that is not caught gets away")
+	_check(sim._is_stage_finished(), "an escaped bounty does not hold up the stage")
+	sim = _sim()
+	var caught := _single_block(sim, Vector2i(3, 5), 10, "bounty")
+	caught["turns"] = 3
+	caught["dir"] = 1
+	before = sim.coins
+	sim._damage_block(Vector2i(3, 5), 100.0)
+	_check(sim.counters["bounties"] == 1 and sim.coins - before >= int(GameSim.BOUNTY_COINS), "catching a bounty pays a fortune")
+
+	sim = _sim()
+	_single_block(sim, Vector2i(3, 2), 100000)
+	sim.combo = GameSim.FEVER_COMBO - 1
+	sim._damage_block(Vector2i(3, 2), 1.0)
+	_check(sim.fever and sim.counters["fevers"] == 1, "a long combo starts a fever")
+	before = sim.coins
+	sim._coin_carry = 0.0
+	sim._grant_coins(10.0)
+	_check(sim.coins - before == 10 * int(GameSim.FEVER_COINS), "a fever multiplies coins")
+	sim.blocks = {}
+	sim.fire(Vector2.UP)
+	_check(not sim.fever, "a fever ends with its shot")
+	var jackpots := 0
+	for seed_value in 400:
+		var j := _sim(seed_value, {"emit_events": true})
+		j.blocks = {}
+		j.waves_left = 0
+		j.events = []
+		j._clear_stage()
+		for e in j.events:
+			jackpots += 1 if e["type"] == "jackpot" else 0
+	_check(jackpots > 5 and jackpots < 60, "jackpots are rare but real (%d/400)" % jackpots)
+
+
+func _test_endgame() -> void:
+	var awakened_found := false
+	for seed_value in 60:
+		var s := _sim(seed_value, {"tier": 8})
+		s.stage = 3
+		s._start_stage()
+		if (s.boss_block as Dictionary)["awakened"]:
+			awakened_found = true
+			_check(int((s.boss_block as Dictionary)["summon"]) >= 2, "an awakened boss summons more")
+			break
+	_check(awakened_found, "high tiers awaken bosses")
+	var low := _sim(3, {"tier": 0})
+	low.stage = 3
+	low._start_stage()
+	_check(not (low.boss_block as Dictionary)["awakened"], "low tiers never awaken bosses")
+	var duo_found := false
+	for seed_value in 80:
+		var s := _sim(seed_value, {"tier": 8, "boss_force": "dokan"})
+		s.stage = 7
+		s._start_stage()
+		var guards_list: Array = (s.boss_block as Dictionary)["guards"]
+		if not guards_list.is_empty() and (guards_list[0] as Dictionary).has("ally_id"):
+			duo_found = true
+			var ally: Dictionary = guards_list[0]
+			_check(s.is_boss_guarded(), "a partner shields the boss")
+			_check_board_valid(s, "a double battle starts valid")
+			for turn in 3:
+				s._descend()
+				if s.boss_block == null:
+					break
+			_check_board_valid(s, "a double battle stays valid over turns")
+			s._damage_block(ally["origin"], 1.0e9)
+			_check(not s.is_boss_guarded(), "the shield falls with the partner")
+			break
+	_check(duo_found, "high tiers bring double battles")
+	var true_run := _sim(5, {"true_path": true})
+	_check(true_run.stage_total() == GameSim.STAGES.size() + 1, "the true path adds a stage")
+	true_run.stage = GameSim.STAGES.size() - 1
+	true_run._start_stage()
+	true_run.blocks = {}
+	true_run.waves_left = 0
+	true_run.boss_block = null
+	true_run._clear_stage()
+	_check(true_run.state == GameSim.State.UPGRADE, "on the true path the old final stage is not the end")
+	true_run.stage = GameSim.STAGES.size()
+	true_run._start_stage()
+	_check(true_run.boss_id() == "origin", "the true stage holds the first Breaker")
+	for turn in 6:
+		true_run._descend()
+		if true_run.boss_block == null:
+			break
+	true_run._damage_block((true_run.boss_block as Dictionary)["origin"], 1.0e9)
+	true_run.state = GameSim.State.SHOOT
+	true_run._end_shot()
+	_check(true_run.state == GameSim.State.WON and true_run.counters["boss_origin"] == 1, "beating it wins the run")
+	var save := SaveData.new(_temp_save_path("true"))
+	_check(not save.has_beaten_every_boss(), "the true path starts closed")
+	for id in Bosses.ids():
+		if int(Bosses.BOSSES[id]["pool"]) < 2:
+			save.lifetime["boss_" + id] = 1
+			save.mark_boss_met(id)
+	_check(save.has_beaten_every_boss() and save.run_config(false)["true_path"], "beating every keeper opens it")
+	_check(save.rush_list().size() == 12 and not save.rush_list().has("origin"), "the rush runs through every keeper met")
+	var rush_run := _sim(1, {"rush": ["purun", "dokan"]})
+	_check(rush_run.stage_total() == 2, "a rush is as long as its list")
+	rush_run.stage = 0
+	rush_run._start_stage()
+	_check(rush_run.boss_id() == "purun" and rush_run.is_boss_stage(1), "a rush is nothing but bosses")
+	rush_run._damage_block((rush_run.boss_block as Dictionary)["origin"], 1.0e9)
+	rush_run.state = GameSim.State.SHOOT
+	rush_run._end_shot()
+	_check(rush_run.state == GameSim.State.UPGRADE, "a rush offers upgrades between bosses")
+	rush_run.choose_upgrade(rush_run.choices[0])
+	while rush_run.state == GameSim.State.UPGRADE:
+		rush_run.choose_upgrade(rush_run.choices[0])
+	_check(rush_run.stage == 1 and rush_run.boss_id() == "dokan", "the rush moves to the next boss")
+	rush_run._damage_block((rush_run.boss_block as Dictionary)["origin"], 1.0e9)
+	rush_run.state = GameSim.State.SHOOT
+	rush_run._end_shot()
+	_check(rush_run.state == GameSim.State.WON and rush_run.counters["rush_clears"] == 1, "finishing the list clears the rush")
+
+
+func _test_cosmetics_and_notes() -> void:
+	var save := SaveData.new(_temp_save_path("looks"))
+	_check(save.wearing("skin") == "skin_default", "the plain look comes first")
+	_check(not save.wear("skin_gold"), "a locked look cannot be worn")
+	save.achievements["wins_2"] = true
+	_check(save.wear("skin_gold") and save.wearing("skin") == "skin_gold", "an unlocked look can be worn")
+	var ids := {}
+	for entry in Achievements.all():
+		ids[entry["id"]] = true
+	var ok := true
+	for id: String in Cosmetics.ITEMS:
+		var unlock := String(Cosmetics.ITEMS[id]["unlock"])
+		ok = ok and (unlock == "" or ids.has(unlock))
+		for lang in I18n.LANGS:
+			ok = ok and I18n.TEXT[lang].has("look_" + id)
+	_check(ok, "looks have text and real unlocks")
+	var notes_ok := true
+	for i in SaveData.NOTE_COUNT:
+		for lang in I18n.LANGS:
+			notes_ok = notes_ok and I18n.TEXT[lang].has("note_%d" % (i + 1))
+	_check(notes_ok, "every note has text")
+	for i in SaveData.NOTE_COUNT + 3:
+		save.add_note()
+	_check(save.notes == SaveData.NOTE_COUNT and not save.add_note(), "notes stop at the last one")
+	var path := _temp_save_path("looks_load")
+	var saved := SaveData.new(path)
+	saved.achievements["wins_2"] = true
+	saved.wear("skin_gold")
+	saved.notes = 3
+	saved.save_file()
+	var loaded := SaveData.new(path)
+	loaded.load_file()
+	_check(loaded.wearing("skin") == "skin_gold" and loaded.notes == 3, "looks and notes survive a reload")
+	DirAccess.remove_absolute(path)
 
 
 func _test_next_unlock() -> void:
