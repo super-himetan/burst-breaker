@@ -69,6 +69,7 @@ func _init() -> void:
 	_test_old_sound_switches_carry_over()
 	_test_perk_icons()
 	_test_style_ranks()
+	_test_high_tier_bosses()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -738,7 +739,17 @@ func _check_board_valid(sim: GameSim, label: String) -> void:
 
 
 func _test_boss_cast() -> void:
-	_check(Bosses.ids().size() == 6, "six bosses exist")
+	_check(Bosses.ids().size() == 12, "twelve bosses exist")
+	for high_tier in [2, 5, 20]:
+		_check(Bosses.in_pool(0, high_tier).size() > 3 and Bosses.in_pool(1, high_tier).size() >= 3, "tier %d widens the roster" % high_tier)
+	_check(Bosses.in_pool(1, 8).size() == 6 and Bosses.in_pool(0, 4).size() == 6, "every boss joins by its tier")
+	var high_met := {}
+	for seed_value in 80:
+		var high := _sim(seed_value, {"tier": 8})
+		high.stage = 7
+		high._start_stage()
+		high_met[high.boss_id()] = true
+	_check(high_met.has("void") and high_met.has("dokan"), "high tiers mix new bosses with old")
 	for pool in 2:
 		_check(Bosses.in_pool(pool).size() == 3, "boss pool %d offers a choice" % pool)
 		var met := {}
@@ -761,7 +772,10 @@ func _test_boss_cast() -> void:
 			if sim.boss_block == null:
 				break
 		_check_board_valid(sim, "%s: board stays consistent over turns" % id)
-		sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
+		# Homura takes a second finishing blow, by design.
+		for blow in 2:
+			if sim.boss_block != null:
+				sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
 		_check(sim.blocks.is_empty() and sim.counters["boss_" + id] == 1, "%s: its defeat is counted and clears the field" % id)
 
 
@@ -1428,6 +1442,75 @@ func _test_style_ranks() -> void:
 	var run_score := lost.run_rank()
 	lost.state = GameSim.State.WON
 	_check(lost.run_rank() == run_score + 1, "finishing the run lifts its grade")
+
+
+func _test_high_tier_bosses() -> void:
+	var mirage := _boss_sim("mirage")
+	var moved := false
+	for turn in 6:
+		var x: int = (mirage.boss_block as Dictionary)["origin"].x
+		mirage._descend()
+		moved = moved or (mirage.boss_block as Dictionary)["origin"].x != x
+	_check(moved, "mirage: keeps moving")
+	_check_board_valid(mirage, "mirage: the board survives blinking")
+
+	var chrono := _boss_sim("chrono")
+	var clock: Dictionary = chrono.boss_block
+	chrono._shot_start_boss_hp = int(clock["hp"])
+	var full := int(clock["hp"])
+	clock["hp"] = full - 100
+	chrono._boss_trick()
+	_check(int(clock["hp"]) == full - 75, "chrono: rewinds a share of the last shot (%d)" % (full - int(clock["hp"])))
+	var chrono_idle := _boss_sim("chrono")
+	chrono_idle._shot_start_boss_hp = 0
+	chrono_idle._boss_trick()
+	_check(int((chrono_idle.boss_block as Dictionary)["hp"]) == int((chrono_idle.boss_block as Dictionary)["max_hp"]), "chrono: nothing to rewind without a hit")
+
+	var hyoga := _boss_sim("hyoga")
+	var armor_before := 0
+	for block in hyoga.unique_blocks():
+		armor_before += 1 if block["kind"] == "armor" else 0
+	for x in 3:
+		hyoga._put_block(Vector2i(x, 7), "normal", 50)
+	hyoga._boss_trick()
+	var armor_after := 0
+	for block in hyoga.unique_blocks():
+		armor_after += 1 if block["kind"] == "armor" else 0
+	_check(armor_after == armor_before + GameSim.HYOGA_FREEZES, "hyoga: freezes plain blocks")
+
+	var homura := _boss_sim("homura", 7)
+	var bird: Dictionary = homura.boss_block
+	homura._damage_block(bird["origin"], 1.0e9)
+	_check(homura.boss_block != null and int(bird["hp"]) == int(int(bird["max_hp"]) * GameSim.HOMURA_REBIRTH) and homura.counters["bosses"] == 0, "homura: rises once from a killing blow")
+	_check(bird["angry"], "homura: comes back furious")
+	homura._damage_block(bird["origin"], 1.0e9)
+	_check(homura.boss_block == null and homura.counters["bosses"] == 1, "homura: stays down the second time")
+
+	var tsukuyo := _boss_sim("tsukuyo", 7)
+	var moon: Dictionary = tsukuyo.boss_block
+	var hp_start := int(moon["hp"])
+	tsukuyo._damage_block(moon["origin"], 100.0)
+	_check(hp_start - int(moon["hp"]) == 150, "tsukuyo: takes extra damage while open")
+	tsukuyo._boss_trick()
+	_check(tsukuyo.is_boss_guarded(), "tsukuyo: the veil counts as guarded")
+	var hp_veiled := int(moon["hp"])
+	tsukuyo._damage_block(moon["origin"], 100.0)
+	_check(hp_veiled - int(moon["hp"]) == 25, "tsukuyo: the veil cuts damage")
+	tsukuyo._boss_trick()
+	_check(not tsukuyo.is_boss_guarded(), "tsukuyo: the veil falls again")
+
+	var void_boss := _boss_sim("void", 7)
+	void_boss.burst_charge = 0.5
+	void_boss._boss_trick()
+	_check(is_equal_approx(void_boss.burst_charge, 0.5 - GameSim.VOID_DRAIN), "void: drains the burst gauge")
+	void_boss.burst_charge = 0.01
+	void_boss._boss_trick()
+	_check(void_boss.burst_charge == 0.0, "void: the gauge never goes negative")
+	var lore_ok := true
+	for id in Bosses.ids():
+		for lang in I18n.LANGS:
+			lore_ok = lore_ok and I18n.TEXT[lang].has("boss_%s_lore" % id)
+	_check(lore_ok, "every boss has a story in every language")
 
 
 func _test_next_unlock() -> void:

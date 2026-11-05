@@ -277,6 +277,10 @@ func _verify_boss_cast(sim: GameSim) -> void:
 		await _wait(0.5)
 		await _shot("42_boss_angry_%s" % id)
 		sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
+		if sim.boss_block != null:
+			await _wait(0.4)
+			await _shot("42a_boss_rebirth_%s" % id)
+			sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
 		await _wait(0.2)
 		await _shot("43_boss_down_%s" % id)
 		await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
@@ -382,6 +386,12 @@ func _verify_meta_screens() -> void:
 	await _shot("17_codex_blocks_ja")
 	await _tap_button("tab_bosses")
 	await _shot("17b_codex_bosses_ja")
+	await _wait(0.4)
+	await _tap_at(Vector2(360.0, Menus.LIST_TOP + 55.0))
+	_check("boss_page_opens", host.menus._boss_page != "")
+	await _shot("17c_boss_page_ja")
+	await _tap_button("boss_page_close")
+	_check("boss_page_closes", host.menus._boss_page == "")
 	await _tap_button("back")
 
 	await _tap_button("prestige")

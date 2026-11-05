@@ -44,6 +44,7 @@ var codex_tab := "perks"
 var confirm_prestige := false
 var _achievement_rows: Array[Dictionary] = []
 var _achievements_done := 0
+var _boss_page := ""
 var _buying := false
 var _buy_timer := 0.0
 var _buy_chain := 0
@@ -68,6 +69,7 @@ func num(value: int) -> String:
 func on_enter(screen: int) -> void:
 	scroll = 0.0
 	confirm_prestige = false
+	_boss_page = ""
 	_buying = false
 	_milestone_time = 0.0
 	_row_flash = {}
@@ -169,6 +171,9 @@ func buttons(screen: int) -> Array[Dictionary]:
 			list.append(_button("stars_reset", Rect2(60.0, 1120.0, 290.0, 92.0), t("stars_reset"), "normal" if not save.star_nodes.is_empty() else "disabled"))
 			list.append(_button("back", Rect2(370.0, 1120.0, 290.0, 92.0), t("back")))
 		Screen.CODEX:
+			if _boss_page != "":
+				list.append(_button("boss_page_close", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
+				return list
 			for i in CODEX_TABS.size():
 				var tab := CODEX_TABS[i]
 				var rect := Rect2(40.0 + i * 162.0, 122.0, 152.0, 70.0)
@@ -221,6 +226,8 @@ func press(id: String) -> bool:
 		"tier_up", "tier_down":
 			save.set_tier(int(save.tier) + (1 if id == "tier_up" else -1))
 			save.save_file()
+		"boss_page_close":
+			_boss_page = ""
 		"buy_all":
 			if save.cheapest_item() != "":
 				_buying = true
@@ -262,6 +269,12 @@ func scroll_by(screen: int, amount: float) -> void:
 
 
 func tap_list(screen: int, p: Vector2) -> void:
+	if screen == Screen.CODEX and codex_tab == "bosses" and _boss_page == "":
+		var row := int((p.y - LIST_TOP + scroll) / (CODEX_ROW_H + ROW_GAP))
+		var bosses := Bosses.ids()
+		if p.y >= LIST_TOP and p.y <= LIST_BOTTOM and row >= 0 and row < bosses.size() and save.bosses_met.has(bosses[row]):
+			_boss_page = bosses[row]
+		return
 	if p.y < LIST_TOP or p.y > LIST_BOTTOM or not screen in [Screen.SHOP, Screen.STARS]:
 		return
 	var index := int((p.y - LIST_TOP + scroll) / (SHOP_ROW_H + ROW_GAP))
@@ -308,6 +321,9 @@ func draw(screen: int) -> void:
 			_heading(t("achievements"), 66.0)
 			host.text_center(Vector2(BASE_W / 2.0, 160.0), t("achievement_count") % [_achievements_done, _achievement_rows.size()], 26, UI.MUTED, host.font_body)
 		Screen.CODEX:
+			if _boss_page != "":
+				_draw_boss_page(_boss_page)
+				return
 			_heading(t("codex"), 58.0)
 			if codex_tab == "perks":
 				host.text_center(Vector2(BASE_W / 2.0, 1106.0), t("codex_seen") % [save.perks_seen.size(), _codex_ids().size()], 20, UI.MUTED, host.font_body)
@@ -326,7 +342,8 @@ func draw_list(screen: int) -> void:
 		Screen.ACHIEVEMENTS:
 			_draw_achievements()
 		Screen.CODEX:
-			_draw_codex()
+			if _boss_page == "":
+				_draw_codex()
 		Screen.STARS:
 			_draw_star_tree()
 
@@ -697,6 +714,8 @@ func _draw_codex_boss(id: String, y: float) -> void:
 		host.text_center(portrait.get_center(), "?", 40, Color(UI.MUTED, 0.6))
 		host.text_left(Vector2(228.0, y + 36.0), t("codex_unknown"), 28, Color(UI.MUTED, 0.7))
 		var stage_hint := t("boss_hint_%d" % int(Bosses.BOSSES[id]["pool"]))
+		if Bosses.min_tier(id) > 0:
+			stage_hint = t("boss_hint_tier") % Bosses.min_tier(id)
 		host.text_left(Vector2(228.0, y + 76.0), stage_hint, host.fit_size(stage_hint, 22, 430.0), Color(UI.MUTED, 0.8), host.font_body)
 		return
 	BossArt.draw(host.canvas, id, portrait, "idle", host.time)
@@ -706,6 +725,26 @@ func _draw_codex_boss(id: String, y: float) -> void:
 	host.text_right(Vector2(656.0, y + 30.0), kills, 19, UI.MUTED, host.font_label)
 	var desc := t("boss_%s_desc" % id)
 	host.text_left(Vector2(228.0, y + 74.0), desc, host.fit_size(desc, 22, 430.0), UI.TEXT, host.font_body)
+
+
+## A boss's own page. The story is the reward for beating it, not just for meeting it.
+func _draw_boss_page(id: String) -> void:
+	var color := Bosses.color(id)
+	var portrait := Rect2(150.0, 150.0, 420.0, 220.0)
+	host.soft_glow(portrait.get_center(), Vector2(900.0, 640.0), Color(color, 0.3))
+	BossArt.draw(host.canvas, id, portrait, "idle", host.time)
+	var name_text := t("boss_%s_name" % id)
+	host.text_center(Vector2(BASE_W / 2.0, 450.0), name_text, host.fit_size(name_text, 64, 640.0), color.lightened(0.35))
+	var title := t("boss_%s_title" % id)
+	host.text_center(Vector2(BASE_W / 2.0, 510.0), title, host.fit_size(title, 28, 640.0), UI.MUTED, host.font_label)
+	var beaten: bool = save.stat_value("boss_" + id) > 0
+	var story := t("boss_%s_lore" % id) if beaten else t("boss_lore_locked")
+	var flags := TextServer.BREAK_MANDATORY | TextServer.BREAK_WORD_BOUND | TextServer.BREAK_ADAPTIVE
+	host.canvas.draw_multiline_string(host.font_body, Vector2(70.0, 590.0), story, HORIZONTAL_ALIGNMENT_LEFT, 580.0, 30, -1, UI.TEXT if beaten else UI.MUTED, flags)
+	var trick := t("boss_%s_desc" % id)
+	host.text_center(Vector2(BASE_W / 2.0, 950.0), trick, host.fit_size(trick, 25, 640.0), UI.GOLD, host.font_body)
+	if beaten:
+		host.text_center(Vector2(BASE_W / 2.0, 1000.0), t("boss_defeated") % save.stat_value("boss_" + id), 22, UI.MUTED, host.font_label)
 
 
 func _draw_prestige() -> void:

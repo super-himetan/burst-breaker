@@ -779,6 +779,27 @@ func _on_boss_action(e: Dictionary) -> void:
 			_play("pick", 0.7)
 		"aim":
 			_play("charge", 1.6)
+		"blink":
+			_play("pick", 0.6)
+			_spawn_particles(e["pos"], color, 28, 520.0)
+		"freeze":
+			_play("pick", 1.8)
+		"veil":
+			_play("charge", 1.8)
+			rings.append({"pos": e["pos"], "t": 0.0, "size": 180.0})
+		"drain":
+			_play("charge", 0.7)
+			_spawn_particles(Vector2(BASE_W / 2.0, 1250.0), color, 16, 300.0)
+		"rebirth":
+			_play("blast", 0.9)
+			_play("win", 1.1)
+			screen_flash = 1.0
+			trauma = 1.0
+			impact = 0.03
+			_spawn_particles(e["pos"], color, 90, 1000.0)
+			boss_rage_said = true
+			_say("boss_homura_angry", true)
+			return
 		"laser":
 			_play("blast", 1.3)
 			trauma = minf(trauma + 0.6, 1.0)

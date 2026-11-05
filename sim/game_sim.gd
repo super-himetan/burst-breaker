@@ -75,6 +75,16 @@ const LUMINA_ANGRY_HEAL := 0.03
 const BOSS_BURN_SCALE := 0.25
 const DOKAN_THROWS := 2
 const ZERO_WALL_ROWS := 4
+## Chrono undoes this share of the damage from the shot before.
+const CHRONO_REWIND := 0.25
+const CHRONO_ANGRY_REWIND := 0.4
+const HYOGA_FREEZES := 2
+## Homura comes back once with this share of its health.
+const HOMURA_REBIRTH := 0.5
+## Tsukuyo trades turns between a veil (the guarded rate) and an opening.
+const TSUKUYO_EXPOSED := 1.5
+const VOID_DRAIN := 0.12
+const VOID_ANGRY_DRAIN := 0.2
 ## Boss tricks never place blocks closer to the danger line than this.
 const BOSS_REACH_MARGIN := 4
 ## Each owned level sharing a tag raises a perk's odds, up to a cap so offers never lock in.
@@ -561,7 +571,7 @@ func boss_id() -> String:
 func _pick_boss(pool: int) -> String:
 	if boss_force != "" and (not boss_force_own_pool or int(Bosses.BOSSES[boss_force]["pool"]) == pool):
 		return boss_force
-	var options := Bosses.in_pool(pool)
+	var options := Bosses.in_pool(pool, tier)
 	var fresh := options.filter(func(id: String) -> bool: return not _boss_met.has(id))
 	var from: Array = fresh if not fresh.is_empty() else options
 	return String(from[_rng.randi_range(0, from.size() - 1)])
@@ -585,6 +595,8 @@ func _spawn_boss(cfg: Dictionary) -> void:
 	block["guards"] = []
 	block["guard_wait"] = 0
 	block["aim_cols"] = []
+	block["veil"] = false
+	block["reborn"] = false
 	boss_block = block
 	for y in BOSS_SIZE.y:
 		for x in BOSS_SIZE.x:
@@ -901,6 +913,8 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		damage = 1.0
 	if block["kind"] == "boss" and not is_burst and is_boss_guarded():
 		damage *= GUARDED_DAMAGE
+	elif block["kind"] == "boss" and block["boss_id"] == "tsukuyo":
+		damage *= TSUKUYO_EXPOSED
 	var amount := maxi(int(ceil(damage)), 1)
 	var dealt: int = mini(amount, int(block["hp"]))
 	block["hp"] = int(block["hp"]) - amount
@@ -924,6 +938,8 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		"crit": flags.get("crit", false),
 		"dot": flags.get("dot", false),
 	})
+	if int(block["hp"]) <= 0 and block["kind"] == "boss" and _try_rebirth(block):
+		return
 	if int(block["hp"]) <= 0:
 		_kill_block(cell, block, flags, _overkill_steps(amount, block, flags))
 	elif block["kind"] == "boss":
@@ -1230,6 +1246,8 @@ func _descend() -> void:
 			origin += Vector2i.DOWN
 		if boss["boss_id"] == "mogu":
 			origin = _strafe(boss, origin)
+		elif boss["boss_id"] == "mirage":
+			origin = _blink(origin)
 		boss["origin"] = origin
 		boss["slid"] = origin.y != old_y
 		for y in BOSS_SIZE.y:
@@ -1354,6 +1372,13 @@ func _split_slime(boss: Dictionary) -> void:
 
 
 ## Mogu: wanders sideways every turn and eats whatever ends up inside it.
+func _blink(origin: Vector2i) -> Vector2i:
+	var next := _rng.randi_range(0, COLS - BOSS_SIZE.x - 1)
+	if next >= origin.x:
+		next += 1
+	return Vector2i(next, origin.y)
+
+
 func _strafe(boss: Dictionary, origin: Vector2i) -> Vector2i:
 	var next: int = origin.x + int(boss["dir"])
 	if next < 0 or next > COLS - BOSS_SIZE.x:
@@ -1388,6 +1413,19 @@ func _boss_trick() -> void:
 			_throw_bombs(boss)
 		"zero":
 			_laser_turn(boss)
+		"mirage":
+			_boss_action("blink")
+		"chrono":
+			_rewind(boss)
+		"hyoga":
+			_freeze_blocks(boss)
+		"tsukuyo":
+			boss["veil"] = not boss["veil"]
+			if boss["veil"]:
+				_boss_action("veil")
+		"void":
+			burst_charge = maxf(burst_charge - (VOID_ANGRY_DRAIN if boss["angry"] else VOID_DRAIN), 0.0)
+			_boss_action("drain")
 
 
 ## Gantetsu: while either bodyguard stands, hits barely scratch it.
@@ -1418,7 +1456,42 @@ func _live_guards() -> Array:
 
 
 func is_boss_guarded() -> bool:
+	if boss_block != null and (boss_block as Dictionary)["veil"]:
+		return true
 	return not _live_guards().is_empty()
+
+
+func _rewind(boss: Dictionary) -> void:
+	var dealt := maxi(_shot_start_boss_hp - int(boss["hp"]), 0)
+	if dealt <= 0:
+		return
+	var share := CHRONO_ANGRY_REWIND if boss["angry"] else CHRONO_REWIND
+	_heal_boss(share * dealt / float(boss["max_hp"]), "heal")
+
+
+func _freeze_blocks(boss: Dictionary) -> void:
+	var plain: Array[Dictionary] = []
+	for block in unique_blocks():
+		if block["kind"] == "normal" and not block.has("post"):
+			plain.append(block)
+	var targets: Array[Vector2] = []
+	for i in mini(HYOGA_FREEZES + (1 if boss["angry"] else 0), plain.size()):
+		var block: Dictionary = plain.pop_at(_rng.randi_range(0, plain.size() - 1))
+		block["kind"] = "armor"
+		targets.append(block_rect(block).get_center())
+	if not targets.is_empty():
+		_boss_action("freeze", {"targets": targets})
+
+
+## Homura's one trick: the blow that should end it lights it up again instead.
+func _try_rebirth(block: Dictionary) -> bool:
+	if block["boss_id"] != "homura" or block["reborn"]:
+		return false
+	block["reborn"] = true
+	block["hp"] = maxi(int(float(block["max_hp"]) * HOMURA_REBIRTH), 1)
+	block["angry"] = true
+	_boss_action("rebirth")
+	return true
 
 
 ## Dokan: lobs bombs and rubble just ahead of the front line.

@@ -25,6 +25,18 @@ static func draw(canvas: CanvasItem, id: String, rect: Rect2, mood: String, time
 			_lumina(canvas, c, h, color, mood, time)
 		"zero":
 			_zero(canvas, c, h, color, mood, time)
+		"mirage":
+			_mirage(canvas, c, h, color, mood, time)
+		"chrono":
+			_chrono(canvas, c, h, color, mood, time)
+		"hyoga":
+			_hyoga(canvas, c, h, color, mood, time)
+		"homura":
+			_homura(canvas, c, h, color, mood, time)
+		"tsukuyo":
+			_tsukuyo(canvas, c, h, color, mood, time)
+		"void":
+			_void(canvas, c, h, color, mood, time)
 
 
 static func _ellipse(center: Vector2, radius: Vector2, from := 0.0, to := TAU, steps := 40) -> PackedVector2Array:
@@ -277,3 +289,123 @@ static func _rounded(canvas: CanvasItem, rect: Rect2, radius: float, color: Colo
 			var a: float = float(corner[1]) + i * (PI / 2.0) / 6.0
 			points.append((corner[0] as Vector2) + Vector2.from_angle(a) * r)
 	_fill(canvas, points, color)
+
+
+static func _mouth(canvas: CanvasItem, c: Vector2, h: float, mood: String) -> void:
+	match mood:
+		"idle":
+			_smile(canvas, c, h * 0.09, h * 0.035)
+		"angry":
+			_frown(canvas, c, h * 0.09, h * 0.035)
+		_:
+			_oval(canvas, c + Vector2(0.0, h * 0.03), Vector2(h * 0.06, h * 0.07), INK)
+
+
+## A dancer who is never quite where she seems to be: fading copies sway at either side.
+static func _mirage(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	var sway := sin(time * 2.2) * h * 0.05
+	for side in [-1.0, 1.0]:
+		var ghost: Vector2 = c + Vector2((h * 0.72 + sway) * side, h * 0.02)
+		_oval(canvas, ghost, Vector2(h * 0.34, h * 0.42), Color(color, 0.22))
+	var body := c + Vector2(-sway * 0.4, 0.0)
+	_oval(canvas, body + Vector2(0.0, h * 0.14), Vector2(h * 0.62, h * 0.32), color.darkened(0.25))
+	_oval(canvas, body, Vector2(h * 0.46, h * 0.44), color)
+	_oval(canvas, body + Vector2(-h * 0.15, -h * 0.27), Vector2(h * 0.16, h * 0.07), SKIN_LIGHT)
+	var jewel := body + Vector2(0.0, -h * 0.34)
+	_fill(canvas, PackedVector2Array([jewel + Vector2(0.0, -h * 0.08), jewel + Vector2(h * 0.06, 0.0), jewel + Vector2(0.0, h * 0.08), jewel + Vector2(-h * 0.06, 0.0)]), Color("fff1a8"))
+	_eyes(canvas, body + Vector2(0.0, -h * 0.05), h * 0.2, h * 0.1, mood, time)
+	_mouth(canvas, body + Vector2(0.0, h * 0.16), h, mood)
+
+
+## A pocket watch that has outlived its owner. Its hands never stop, even when struck.
+static func _chrono(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	var r := h * 0.47
+	canvas.draw_circle(c + Vector2(0.0, -r - h * 0.02), h * 0.06, color.darkened(0.2))
+	canvas.draw_circle(c, r, color.darkened(0.25))
+	canvas.draw_circle(c, r * 0.87, Color("fff6dc"))
+	for i in 12:
+		var dir := Vector2.from_angle(i * TAU / 12.0)
+		canvas.draw_line(c + dir * r * 0.72, c + dir * r * 0.82, INK, h * 0.018, true)
+	var speed := 5.0 if mood == "angry" else 1.0
+	canvas.draw_line(c, c + Vector2.from_angle(time * speed - PI / 2.0) * r * 0.74, Color(color.darkened(0.45), 0.55), h * 0.022, true)
+	canvas.draw_line(c, c + Vector2.from_angle(time * speed / 12.0 + 2.0) * r * 0.5, Color(color.darkened(0.45), 0.55), h * 0.034, true)
+	_eyes(canvas, c + Vector2(0.0, -h * 0.05), h * 0.16, h * 0.085, mood, time)
+	_mouth(canvas, c + Vector2(0.0, h * 0.17), h, mood)
+
+
+## A wolf who froze along with what it stopped: a crown of ice around a stern face.
+static func _hyoga(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	var glint := 0.5 + sin(time * 2.6) * 0.5
+	for i in 5:
+		var x := (float(i) - 2.0) * h * 0.3
+		var tall := h * (0.62 - absf(float(i) - 2.0) * 0.1)
+		_fill(canvas, PackedVector2Array([c + Vector2(x - h * 0.16, -h * 0.1), c + Vector2(x, -tall), c + Vector2(x + h * 0.16, -h * 0.1)]), color.lightened(0.15 + glint * 0.15))
+	for side in [-1.0, 1.0]:
+		var ear: Vector2 = c + Vector2(h * 0.46 * side, -h * 0.1)
+		_fill(canvas, PackedVector2Array([ear + Vector2(-h * 0.13, h * 0.08), ear + Vector2(h * 0.1 * side, -h * 0.22), ear + Vector2(h * 0.13, h * 0.08)]), color.darkened(0.3))
+	_oval(canvas, c + Vector2(0.0, h * 0.1), Vector2(h * 0.56, h * 0.36), color)
+	_oval(canvas, c + Vector2(0.0, h * 0.26), Vector2(h * 0.26, h * 0.16), Color.WHITE)
+	canvas.draw_circle(c + Vector2(0.0, h * 0.18), h * 0.05, INK)
+	_eyes(canvas, c + Vector2(0.0, h * 0.0), h * 0.23, h * 0.09, mood, time, Color("2c6ea3"))
+	_mouth(canvas, c + Vector2(0.0, h * 0.27), h, mood)
+
+
+## A phoenix forever burning out and coming back: all wings, flame and stubborn hope.
+static func _homura(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	var flap := sin(time * 5.0) * h * 0.1
+	for side in [-1.0, 1.0]:
+		var root: Vector2 = c + Vector2(h * 0.3 * side, h * 0.02)
+		_fill(canvas, PackedVector2Array([root + Vector2(0.0, -h * 0.14), root + Vector2(h * 0.66 * side, -h * 0.32 + flap), root + Vector2(h * 0.48 * side, h * 0.02 + flap), root + Vector2(h * 0.56 * side, h * 0.14 + flap), root + Vector2(0.0, h * 0.24)]), color.darkened(0.15))
+	for i in 3:
+		var x := (float(i) - 1.0) * h * 0.2
+		var lick := sin(time * 9.0 + i) * h * 0.04
+		_fill(canvas, PackedVector2Array([c + Vector2(x - h * 0.13, -h * 0.28), c + Vector2(x + lick, -h * (0.62 - absf(float(i) - 1.0) * 0.14)), c + Vector2(x + h * 0.13, -h * 0.28)]), Color("ffd166"))
+	_oval(canvas, c + Vector2(0.0, h * 0.03), Vector2(h * 0.42, h * 0.4), color)
+	_oval(canvas, c + Vector2(0.0, h * 0.2), Vector2(h * 0.24, h * 0.18), Color("ffd166"))
+	_eyes(canvas, c + Vector2(0.0, -h * 0.07), h * 0.17, h * 0.09, mood, time)
+	_fill(canvas, PackedVector2Array([c + Vector2(-h * 0.08, h * 0.05), c + Vector2(h * 0.08, h * 0.05), c + Vector2(0.0, h * 0.2)]), Color("ffb020"))
+
+
+## A princess who calls herself the moon. Her shadow slides across her face with the hours.
+static func _tsukuyo(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	var r := h * 0.47
+	for i in 5:
+		var angle := i * TAU / 5.0 + time * 0.3
+		canvas.draw_circle(c + Vector2.from_angle(angle) * Vector2(h * 0.86, h * 0.42), h * 0.022, Color("fff1a8"))
+	canvas.draw_circle(c, r, color)
+	var shade := c + Vector2(r * (0.95 + sin(time * 0.7) * 0.12), -r * 0.12)
+	var disc := _ellipse(c, Vector2(r, r))
+	disc.remove_at(disc.size() - 1)
+	var cover := _ellipse(shade, Vector2(r * 0.62, r * 0.84))
+	cover.remove_at(cover.size() - 1)
+	# Only the part inside the moon is shadow, or it would read as a second object.
+	for piece in Geometry2D.intersect_polygons(disc, cover):
+		_fill(canvas, piece, color.darkened(0.45))
+	_oval(canvas, c + Vector2(-r * 0.42, -r * 0.5), Vector2(r * 0.22, r * 0.12), SKIN_LIGHT)
+	var face := c + Vector2(-h * 0.06, -h * 0.03)
+	_eyes(canvas, face, h * 0.16, h * 0.085, mood, time)
+	_mouth(canvas, face + Vector2(0.0, h * 0.18), h, mood)
+
+
+## The hole in the sky that everything falls from. One eye, and it has seen you already.
+static func _void(canvas: CanvasItem, c: Vector2, h: float, color: Color, mood: String, time: float) -> void:
+	for i in 3:
+		var tilt := time * (0.7 + i * 0.25) + i * 2.1
+		var ring := _ellipse(Vector2.ZERO, Vector2(h * (0.86 - i * 0.12), h * (0.24 + i * 0.07)), 0.0, TAU, 44)
+		var turned := PackedVector2Array()
+		for p in ring:
+			turned.append(c + p.rotated(sin(tilt) * 0.5))
+		canvas.draw_polyline(turned, Color(color.lightened(i * 0.2), 0.75 - i * 0.15), h * 0.03, true)
+	canvas.draw_circle(c, h * 0.42, Color("07050f"))
+	canvas.draw_arc(c, h * 0.42, 0.0, TAU, 48, color, h * 0.035, true)
+	match mood:
+		"dead":
+			canvas.draw_line(c + Vector2(-h * 0.2, 0.0), c + Vector2(h * 0.2, 0.0), color, h * 0.05, true)
+		"hurt":
+			_oval(canvas, c, Vector2(h * 0.24, h * 0.05), Color.WHITE)
+			canvas.draw_circle(c, h * 0.045, Color("ff4d6d"))
+		_:
+			_oval(canvas, c, Vector2(h * 0.26, h * 0.17), Color.WHITE)
+			var look := Vector2(sin(time * 0.8) * h * 0.07, 0.0)
+			canvas.draw_circle(c + look, h * 0.11, Color("ff4d6d") if mood == "angry" else color)
+			canvas.draw_circle(c + look, h * 0.05, Color("07050f"))

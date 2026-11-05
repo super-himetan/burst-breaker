@@ -38,6 +38,12 @@ const TRACKS := {
 	"boss_dokan": [1],
 	"boss_lumina": [1],
 	"boss_zero": [1],
+	"boss_mirage": [1],
+	"boss_chrono": [1],
+	"boss_hyoga": [1],
+	"boss_homura": [1],
+	"boss_tsukuyo": [1],
+	"boss_void": [1],
 }
 
 ## Stats where the highest single value counts, instead of a running total.
