@@ -30,6 +30,8 @@ var perks_seen := {}
 var bosses_met := {}
 var ball_type := "normal"
 var tier := 0
+## The latest state of a run still in progress, so closing the app cannot lose its coins.
+var interrupted_run := {}
 
 
 func _init(save_path := DEFAULT_PATH) -> void:
@@ -64,6 +66,28 @@ func load_file() -> void:
 	var saved_ball := String(data.get("ball_type", ball_type))
 	ball_type = saved_ball if Balls.BALLS.has(saved_ball) else "normal"
 	tier = int(data.get("tier", tier))
+	interrupted_run = _read_run_summary(data.get("interrupted_run", {}))
+
+
+## JSON turns every number into a float, and a damaged entry should not break the save.
+func _read_run_summary(value: Variant) -> Dictionary:
+	if not value is Dictionary:
+		return {}
+	for key: String in ["damage", "combo", "best_shot", "stage", "coins", "tier"]:
+		if not (value.get(key) is float or value.get(key) is int):
+			return {}
+	var saved_ball := String(value.get("ball_type", "normal"))
+	return {
+		"damage": int(value["damage"]),
+		"combo": int(value["combo"]),
+		"best_shot": int(value["best_shot"]),
+		"stage": int(value["stage"]),
+		"coins": int(value["coins"]),
+		"won": false,
+		"tier": int(value["tier"]),
+		"ball_type": saved_ball if Balls.BALLS.has(saved_ball) else "normal",
+		"counters": _int_map(value.get("counters", {})),
+	}
 
 
 func _int_map(value: Variant, allowed := {}) -> Dictionary:
@@ -109,6 +133,7 @@ func save_file() -> bool:
 		"bosses_met": bosses_met,
 		"ball_type": ball_type,
 		"tier": tier,
+		"interrupted_run": interrupted_run,
 	}, "  "))
 	file.close()
 	return DirAccess.rename_absolute(tmp, path) == OK
@@ -215,9 +240,45 @@ func mark_boss_met(id: String) -> void:
 	bosses_met[id] = true
 
 
+func stash_run(summary: Dictionary) -> void:
+	interrupted_run = summary.duplicate(true)
+
+
+## Banks a run the app closed on. Returns its coins, or -1 when there was no such run.
+func recover_interrupted_run() -> int:
+	if interrupted_run.is_empty():
+		return -1
+	var earned: int = interrupted_run["coins"]
+	record_run(interrupted_run)
+	return earned
+
+
+## The closest achievement that opens a perk or a ball: {id, stat, target, progress, perk, ball}.
+## Empty when everything is already open.
+func next_unlock() -> Dictionary:
+	var rewards := {}
+	for perk: String in Achievements.PERK_UNLOCKS:
+		rewards[Achievements.PERK_UNLOCKS[perk]] = {"perk": perk, "ball": ""}
+	for ball: String in Balls.BALLS:
+		var unlock := String(Balls.BALLS[ball]["unlock"])
+		if unlock != "":
+			rewards[unlock] = {"perk": "", "ball": ball}
+	var best := {}
+	for entry in Achievements.all():
+		var id: String = entry["id"]
+		if achievements.has(id) or not rewards.has(id):
+			continue
+		var progress := clampf(float(stat_value(entry["stat"])) / float(entry["target"]), 0.0, 1.0)
+		if best.is_empty() or progress > float(best["progress"]):
+			best = {"id": id, "stat": entry["stat"], "target": entry["target"], "progress": progress}
+			best.merge(rewards[id])
+	return best
+
+
 ## summary: damage, combo, best_shot, stage, coins, won, tier, ball_type, counters.
 ## Returns true when a personal best was beaten.
 func record_run(summary: Dictionary) -> bool:
+	interrupted_run = {}
 	var damage: int = summary["damage"]
 	var combo: int = summary["combo"]
 	var best_shot: int = summary["best_shot"]

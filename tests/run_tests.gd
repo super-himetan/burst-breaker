@@ -53,6 +53,8 @@ func _init() -> void:
 	_test_text_coverage()
 	_test_save_round_trip()
 	_test_damaged_save_uses_defaults()
+	_test_interrupted_run_keeps_its_coins()
+	_test_next_unlock()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -1153,6 +1155,40 @@ func _test_save_round_trip() -> void:
 	_check(loaded.achievements == fresh.achievements and loaded.perks_seen.has("split"), "achievements and codex survive a reload")
 	_check(loaded.ball_type == "iron" and loaded.tier == 1, "the loadout survives a reload")
 	DirAccess.remove_absolute(path)
+
+
+func _test_interrupted_run_keeps_its_coins() -> void:
+	var path := _temp_save_path("interrupted")
+	var data := SaveData.new(path)
+	data.stash_run(_summary(500, false))
+	var earned: int = data.interrupted_run["coins"]
+	data.save_file()
+	var reopened := SaveData.new(path)
+	reopened.load_file()
+	_check(reopened.coins == 0 and reopened.runs == 0, "a stashed run is not counted until it is recovered")
+	_check(reopened.recover_interrupted_run() == earned, "recovering reports the coins of the closed run")
+	_check(reopened.coins == earned and reopened.runs == 1 and reopened.best_damage == 500, "recovering banks the closed run")
+	_check(reopened.recover_interrupted_run() == -1 and reopened.coins == earned, "a closed run is never banked twice")
+	reopened.stash_run(_summary(600, false))
+	reopened.record_run(_summary(600, false))
+	_check(reopened.interrupted_run.is_empty(), "finishing a run normally clears its stash")
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string("{\"coins\": 9, \"interrupted_run\": {\"coins\": \"lots\"}}")
+	file.close()
+	var damaged := SaveData.new(path)
+	damaged.load_file()
+	_check(damaged.coins == 9 and damaged.recover_interrupted_run() == -1, "a damaged stash is ignored and the save is kept")
+	DirAccess.remove_absolute(path)
+
+
+func _test_next_unlock() -> void:
+	var data := SaveData.new(_temp_save_path("next_unlock"))
+	data.lifetime["kills"] = 99
+	var goal := data.next_unlock()
+	_check(goal["id"] == "kills_1" and goal["perk"] == "burn", "the next unlock is the closest goal that opens something")
+	for entry in Achievements.all():
+		data.achievements[entry["id"]] = true
+	_check(data.next_unlock().is_empty(), "there is no next unlock once everything is open")
 
 
 func _test_damaged_save_uses_defaults() -> void:

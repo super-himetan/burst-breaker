@@ -39,6 +39,7 @@ var menus: Menus
 var verifier: Verify
 var screen: int = Menus.Screen.TITLE
 var settings_return: int = Menus.Screen.TITLE
+var shop_return: int = Menus.Screen.TITLE
 var paused := false
 var run_banked := true
 var run_seconds := 0.0
@@ -142,6 +143,7 @@ func _ready() -> void:
 	menus = Menus.new(self, save)
 	_apply_sound()
 	sim = GameSim.new()
+	_recover_interrupted_run()
 	if verify_dir != "":
 		verifier = Verify.new(self, verify_dir)
 		verifier.run()
@@ -222,6 +224,10 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED:
 		if _can_pause():
 			_set_paused(true)
+		_stash_run()
+		save.save_file()
+	elif what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_stash_run()
 		save.save_file()
 	elif what == NOTIFICATION_WM_GO_BACK_REQUEST:
 		_on_back_request()
@@ -233,6 +239,8 @@ func _on_back_request() -> void:
 			get_tree().quit()
 		Menus.Screen.SETTINGS:
 			_set_screen(settings_return)
+		Menus.Screen.SHOP:
+			_set_screen(shop_return)
 		Menus.Screen.GAME:
 			if paused:
 				_set_paused(false)
@@ -309,7 +317,12 @@ func _bank_run() -> void:
 	run_banked = true
 	if sim.total_damage == 0:
 		return
-	run_new_record = save.record_run({
+	run_new_record = save.record_run(_run_summary())
+	on_progress_changed()
+
+
+func _run_summary() -> Dictionary:
+	return {
 		"damage": sim.total_damage,
 		"combo": sim.best_combo,
 		"best_shot": sim.best_shot_damage,
@@ -319,13 +332,29 @@ func _bank_run() -> void:
 		"tier": sim.tier,
 		"ball_type": sim.ball_type,
 		"counters": sim.counters,
-	})
+	}
+
+
+## Keeps the save up to date with the run in progress. The next launch banks whatever was
+## left here, so the run itself is lost if the app closes but what it earned is not.
+func _stash_run() -> void:
+	if not run_banked and sim.total_damage > 0:
+		save.stash_run(_run_summary())
+
+
+func _recover_interrupted_run() -> void:
+	var earned := save.recover_interrupted_run()
+	if earned < 0:
+		return
 	on_progress_changed()
+	if earned > 0:
+		toasts.append({"text": t("run_recovered") % I18n.format_number(earned), "t": 0.0})
 
 
 ## Checks achievements against saved totals plus the run in progress, then saves.
 func on_progress_changed(live := {}) -> void:
 	_announce(save.check_achievements(live))
+	_stash_run()
 	save.save_file()
 
 
@@ -587,10 +616,6 @@ func _on_press(p: Vector2) -> void:
 					_play("pick", 1.0)
 					sim.choose_upgrade(sim.choices[i])
 					return
-		GameSim.State.WON, GameSim.State.LOST:
-			if screen_age >= ACCEPT_INPUT_AFTER:
-				_play("pick", 1.0)
-				_start_run()
 
 
 func _on_list_drag(p: Vector2) -> void:
@@ -635,6 +660,7 @@ func _press_button(id: String) -> void:
 		"go", "restart":
 			_start_run()
 		"shop":
+			shop_return = screen
 			_set_screen(Menus.Screen.SHOP)
 		"achievements":
 			_set_screen(Menus.Screen.ACHIEVEMENTS)
@@ -648,7 +674,13 @@ func _press_button(id: String) -> void:
 			settings_return = screen
 			_set_screen(Menus.Screen.SETTINGS)
 		"back":
-			_set_screen(settings_return if screen == Menus.Screen.SETTINGS else Menus.Screen.TITLE)
+			match screen:
+				Menus.Screen.SETTINGS:
+					_set_screen(settings_return)
+				Menus.Screen.SHOP:
+					_set_screen(shop_return)
+				_:
+					_set_screen(Menus.Screen.TITLE)
 		"lang_ja", "lang_en":
 			save.lang = id.trim_prefix("lang_")
 			save.save_file()
@@ -685,7 +717,9 @@ func current_buttons() -> Array[Dictionary]:
 		list.append(_button("restart", Rect2(110.0, 690.0, 500.0, 100.0), t("restart")))
 		list.append(_button("to_title", Rect2(110.0, 810.0, 500.0, 100.0), t("to_title")))
 	elif is_run_over():
-		list.append(_button("to_title", Rect2(160.0, 1080.0, 400.0, 100.0), t("to_title")))
+		list.append(_button("restart", Rect2(70.0, 930.0, 580.0, 120.0), t("retry"), "primary"))
+		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop")))
+		list.append(_button("to_title", Rect2(368.0, 1066.0, 282.0, 100.0), t("to_title")))
 	elif sim.state == GameSim.State.UPGRADE:
 		if sim.rerolls > 0:
 			list.append(_button("reroll", Rect2(160.0, 1110.0, 400.0, 90.0), t("reroll_button") % sim.rerolls))
@@ -1592,28 +1626,61 @@ func card_rect(index: int, count: int) -> Rect2:
 func _draw_end_screen(title: String, color: Color) -> void:
 	fill_screen(Color(UI.INK, 0.86))
 	var pop := 1.0 + maxf(0.3 - screen_age, 0.0) * 1.2
-	soft_glow(Vector2(BASE_W / 2.0, 210.0), Vector2(860.0, 360.0), Color(color, 0.22))
-	text_center(Vector2(BASE_W / 2.0, 210.0), title, int(fit_size(title, 76, 640.0) * pop), color)
+	soft_glow(Vector2(BASE_W / 2.0, 124.0), Vector2(860.0, 300.0), Color(color, 0.22))
+	text_center(Vector2(BASE_W / 2.0, 124.0), title, int(fit_size(title, 72, 640.0) * pop), color)
+	var cause := _defeat_line()
+	if cause != "":
+		text_center(Vector2(BASE_W / 2.0, 176.0), cause, fit_size(cause, 26, 620.0), UI.MUTED, font_body)
 	if run_new_record:
-		var chip := Rect2(BASE_W / 2.0 - 170.0, 275.0, 340.0, 56.0)
-		panel(chip, Color(UI.GOLD, 0.14 + sin(time * 5.0) * 0.05), 28.0, UI.GOLD, 2)
-		text_center(chip.get_center(), t("new_record"), fit_size(t("new_record"), 28, 310.0), UI.GOLD)
-	text_center(Vector2(BASE_W / 2.0, 380.0), t("total_damage"), 20, UI.MUTED, font_label)
-	text_center(Vector2(BASE_W / 2.0, 445.0), I18n.format_number(sim.total_damage), 84, UI.TEXT)
-	panel(Rect2(70.0, 510.0, 580.0, 320.0), UI.PANEL, 30.0, UI.LINE, 2)
+		var chip := Rect2(BASE_W / 2.0 - 150.0, 198.0, 300.0, 48.0)
+		panel(chip, Color(UI.GOLD, 0.14 + sin(time * 5.0) * 0.05), 24.0, UI.GOLD, 2)
+		text_center(chip.get_center(), t("new_record"), fit_size(t("new_record"), 25, 270.0), UI.GOLD)
+	text_center(Vector2(BASE_W / 2.0, 272.0), t("total_damage"), 20, UI.MUTED, font_label)
+	text_center(Vector2(BASE_W / 2.0, 326.0), I18n.format_number(sim.total_damage), 72, UI.TEXT)
+	panel(Rect2(70.0, 376.0, 580.0, 240.0), UI.PANEL, 28.0, UI.LINE, 2)
 	var seconds := int(run_seconds)
 	var rows := [
 		["best_shot", I18n.format_number(sim.best_shot_damage)],
 		["best_combo", str(sim.best_combo)],
-		["coins", I18n.format_number(sim.coins)],
+		["coins", t("coins_balance") % [I18n.format_number(sim.coins), I18n.format_number(save.coins)]],
 		["reached", "%d / %d" % [sim.stage + 1, GameSim.STAGES.size()]],
 		["play_time", "%d:%02d" % [seconds / 60, seconds % 60]],
 	]
 	for i in rows.size():
-		row(Vector2(105.0, 553.0 + i * 58.0), 510.0, t(rows[i][0]), rows[i][1], 29, UI.TEXT)
-	_draw_build(848.0, 3)
-	var alpha := 0.6 + sin(time * 4.5) * 0.4
-	text_center(Vector2(BASE_W / 2.0, 1036.0), t("tap_retry"), 40, Color(UI.TEXT, alpha))
+		row(Vector2(105.0, 408.0 + i * 44.0), 510.0, t(rows[i][0]), rows[i][1], 26, UI.TEXT)
+	_draw_next_unlock(Rect2(70.0, 628.0, 580.0, 88.0))
+	_draw_build(734.0, 3)
+
+
+## Says what ended the run, so the next one has something to try differently.
+func _defeat_line() -> String:
+	if sim.state != GameSim.State.LOST:
+		return ""
+	if sim.boss_block == null:
+		return t("defeat_blocks")
+	var boss: Dictionary = sim.boss_block
+	var percent := ceili(100.0 * float(boss["hp"]) / maxf(float(boss["max_hp"]), 1.0))
+	return t("defeat_boss") % [t("boss_%s_name" % sim.boss_id()), percent]
+
+
+func _draw_next_unlock(box: Rect2) -> void:
+	var goal := save.next_unlock()
+	if goal.is_empty():
+		return
+	var reward := t("perk_" + String(goal["perk"])) if goal["perk"] != "" else t("ball_" + String(goal["ball"]))
+	var progress: float = goal["progress"]
+	var left := box.position.x + 26.0
+	var right := box.end.x - 26.0
+	panel(box, UI.PANEL, 24.0, UI.LINE, 2)
+	text_left(Vector2(left, box.position.y + 22.0), t("next_unlock"), 18, UI.MUTED, font_label)
+	text_right(Vector2(right, box.position.y + 22.0), reward, fit_size(reward, 24, 330.0), UI.MINT)
+	var goal_title := menus.achievement_title(goal["id"])
+	text_left(Vector2(left, box.position.y + 50.0), goal_title, fit_size(goal_title, 20, 440.0), UI.TEXT, font_body)
+	text_right(Vector2(right, box.position.y + 50.0), "%d%%" % int(progress * 100.0), 20, UI.MUTED, font_body)
+	var bar := Rect2(left, box.position.y + 68.0, right - left, 8.0)
+	panel(bar, Color(1.0, 1.0, 1.0, 0.08), 4.0)
+	if progress > 0.0:
+		panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 8.0), bar.size.y)), UI.ACCENT, 4.0)
 
 
 ## Largest size up to `size` at which the text fits, so no language can overflow a box.

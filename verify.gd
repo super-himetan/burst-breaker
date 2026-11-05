@@ -141,6 +141,21 @@ func _verify_play() -> void:
 				_check("upgrade_card_tap", host.sim.picks_pending < before or host.sim.stage > stage_before)
 	if host.sim.counters["kills"] <= 0:
 		_check("blocks_were_broken", false)
+	_verify_interruption()
+
+
+## The OS can close a backgrounded app without warning, so its coins must already be on disk.
+func _verify_interruption() -> void:
+	if host.is_run_over():
+		return
+	host.sim.coins += 7
+	host._notification(Node.NOTIFICATION_APPLICATION_PAUSED)
+	var reloaded := SaveData.new(host.save.path)
+	reloaded.load_file()
+	_check("backgrounding_saves_run_coins", int(reloaded.interrupted_run.get("coins", -1)) == host.sim.coins)
+	_check("backgrounding_does_not_bank_twice", reloaded.runs == 0 and reloaded.coins == host.save.coins)
+	if host.paused:
+		host._set_paused(false)
 
 
 func _verify_end() -> void:
@@ -154,10 +169,20 @@ func _verify_end() -> void:
 	var reloaded := SaveData.new(host.save.path)
 	reloaded.load_file()
 	_check("records_persist", reloaded.runs == 1 and reloaded.stat_value("coins") == earned)
+	_check("banked_run_leaves_nothing_to_recover", reloaded.interrupted_run.is_empty())
 	_check("achievement_unlocked_on_first_run", host.save.has_achievement("runs_1"))
 	await _shot("09_end_ja")
+	# A stray tap on the results must not throw them away.
+	await _wait(0.4)
+	await _tap_at(Vector2(360.0, 500.0))
+	_check("end_screen_ignores_stray_taps", host.is_run_over())
+	await _tap_button("shop")
+	_check("end_screen_opens_shop", host.screen == Menus.Screen.SHOP)
+	await _tap_button("back")
+	_check("shop_returns_to_end_screen", host.screen == Menus.Screen.GAME and host.is_run_over())
+	await _wait(0.4)
 	var retry_at := Time.get_ticks_msec()
-	await _tap_at(Vector2(360.0, 950.0))
+	await _tap_at(host.current_buttons()[0]["rect"].get_center())
 	while host.sim.state != GameSim.State.AIM and Time.get_ticks_msec() - retry_at < 3000:
 		await host.get_tree().process_frame
 	_check("retry_under_one_second", Time.get_ticks_msec() - retry_at < 1000)
