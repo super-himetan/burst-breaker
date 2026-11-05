@@ -15,7 +15,7 @@ const Cosmetics := preload("res://data/cosmetics.gd")
 const DEFAULT_PATH := "user://save.json"
 const VOLUME_MAX := 10
 const NOTE_COUNT := 12
-const COINS_PER_STAR_SQUARED := 6000.0
+const COINS_PER_STAR_SQUARED := 10000.0
 ## Experience for simply reaching a stage, and the extra for clearing the run.
 const WIN_XP := 8
 const MAX_TIER_XP := 10
