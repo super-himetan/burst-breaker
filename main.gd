@@ -14,6 +14,7 @@ const Bosses := preload("res://data/bosses.gd")
 const BossArt := preload("res://boss_art.gd")
 const Achievements := preload("res://data/achievements.gd")
 const Shop := preload("res://data/shop.gd")
+const PerkArt := preload("res://perk_art.gd")
 const UI := preload("res://ui_theme.gd")
 const BackgroundShader := preload("res://shaders/background.gdshader")
 const ImpactShader := preload("res://shaders/impact.gdshader")
@@ -41,6 +42,8 @@ const PAN_SCROLL := 24.0
 const COUNT_UP_SECONDS := 1.0
 const COUNT_UP_TICK := 0.07
 const OVERKILL_TEXT_GAP := 0.12
+const CARD_ICON_MAX := 120.0
+const CHIP_ICON_RADIUS := 12.0
 
 var sim: GameSim
 var save: SaveData
@@ -164,6 +167,8 @@ func _ready() -> void:
 	sim = GameSim.new()
 	_recover_interrupted_run()
 	if verify_dir != "":
+		# Automated checks should never make noise, whatever the volume settings say.
+		AudioServer.set_bus_mute(0, true)
 		verifier = Verify.new(self, verify_dir)
 		verifier.run()
 
@@ -428,12 +433,32 @@ func _live_stats() -> Dictionary:
 
 
 func _apply_sound() -> void:
-	AudioServer.set_bus_mute(0, not save.sound)
+	var volume_db := _volume_db(save.sfx_volume)
+	for player in players:
+		player.volume_db = volume_db
+	_apply_music()
 
 
 func _apply_music() -> void:
+	music_player.volume_db = MUSIC_VOLUME_DB + _volume_db(save.music_volume)
 	if music_player.stream != null:
-		music_player.stream_paused = not save.music
+		music_player.stream_paused = save.music_volume <= 0
+
+
+func _volume_db(volume: int) -> float:
+	return linear_to_db(maxf(float(volume) / SaveData.VOLUME_MAX, 0.0001))
+
+
+func _change_volume(id: String) -> void:
+	var step := 1 if id.ends_with("_up") else -1
+	if id.begins_with("sound"):
+		save.sfx_volume = clampi(save.sfx_volume + step, 0, SaveData.VOLUME_MAX)
+	else:
+		save.music_volume = clampi(save.music_volume + step, 0, SaveData.VOLUME_MAX)
+	_apply_sound()
+	save.save_file()
+	# The new level is easiest to judge by hearing it.
+	_play("pick", 1.0)
 
 
 ## Starts the loop once the background render has finished.
@@ -815,16 +840,10 @@ func _press_button(id: String) -> void:
 		"lang_ja", "lang_en":
 			save.lang = id.trim_prefix("lang_")
 			save.save_file()
-		"sound":
-			save.sound = not save.sound
-			_apply_sound()
-			save.save_file()
+		"sound_up", "sound_down", "music_up", "music_down":
+			_change_volume(id)
 		"vibration":
 			save.vibration = not save.vibration
-			save.save_file()
-		"music":
-			save.music = not save.music
-			_apply_music()
 			save.save_file()
 		"reduce_fx":
 			save.reduce_fx = not save.reduce_fx
@@ -1676,6 +1695,14 @@ func _draw_upgrade_screen() -> void:
 		var id := sim.choices[i]
 		var rect := card_rect(i, count)
 		rect.position.y += (1.0 - ease_in) * 70.0
+		var hint := _card_hint(id)
+		var has_hint := String(hint["text"]) != ""
+		# The icon sits in its own column, so the eye can run down the cards and compare them.
+		var icon_area := minf(rect.size.y - (56.0 if has_hint else 32.0), CARD_ICON_MAX)
+		var icon_center := rect.position + Vector2(24.0 + icon_area / 2.0, 14.0 + (rect.size.y - (40.0 if has_hint else 0.0) - 14.0) / 2.0)
+		var text_left_edge := icon_area + 34.0
+		var text_x := text_left_edge + (rect.size.x - text_left_edge) / 2.0
+		var text_width := rect.size.x - text_left_edge - 24.0
 		var perk: Dictionary = Perks.PERKS[id]
 		var color: Color = UI.RARITY[int(perk["rarity"])]
 		var evolution := Perks.is_evolution(id)
@@ -1684,19 +1711,20 @@ func _draw_upgrade_screen() -> void:
 			soft_glow(rect.get_center(), rect.size * 1.5, Color(color, (0.2 + pulse * 0.25) * ease_in))
 		panel(rect, Color(UI.PANEL_SOLID, 0.96 * ease_in), 30.0, Color(color, (0.9 if evolution else 0.45) * ease_in), 3 if evolution else 2)
 		panel(Rect2(rect.position + Vector2(rect.size.x * 0.35, -2.0), Vector2(rect.size.x * 0.3, 5.0)), Color(color, ease_in), 2.5)
+		var tile := Rect2(icon_center - Vector2.ONE * icon_area / 2.0, Vector2.ONE * icon_area)
+		panel(tile, Color(PerkArt.color_of(id), 0.14 * ease_in), icon_area * 0.24, Color(PerkArt.color_of(id), 0.5 * ease_in), 2)
+		PerkArt.draw(canvas, id, icon_center, icon_area * 0.36, ease_in)
 		var label := t("evolution") if evolution else t("rarity_%d" % int(perk["rarity"]))
-		text_center(rect.position + Vector2(rect.size.x / 2.0, 30.0), label, 16, Color(color, ease_in), font_label)
+		text_center(rect.position + Vector2(text_x, 30.0), label, 16, Color(color, ease_in), font_label)
 		var level: int = sim.levels[id]
 		if level > 0:
 			text_right(rect.position + Vector2(rect.size.x - 28.0, 30.0), t("level") % level, 19, Color(UI.MUTED, ease_in), font_body)
-		var hint := _card_hint(id)
-		var has_hint := String(hint["text"]) != ""
 		var name_text := t("perk_" + id)
-		text_center(rect.position + Vector2(rect.size.x / 2.0, rect.size.y * (0.3 if has_hint else 0.38)), name_text, fit_size(name_text, 42, rect.size.x - 60.0), Color(color, ease_in))
+		text_center(rect.position + Vector2(text_x, rect.size.y * (0.3 if has_hint else 0.38)), name_text, fit_size(name_text, 42, text_width), Color(color, ease_in))
 		var lines := t("perk_%s_desc" % id).split("\n")
 		var line_y := rect.size.y * ((0.5 if lines.size() > 1 else 0.56) if has_hint else (0.64 if lines.size() > 1 else 0.7))
 		for l in lines.size():
-			text_center(rect.position + Vector2(rect.size.x / 2.0, line_y + l * 34.0), lines[l], fit_size(lines[l], 25, rect.size.x - 60.0), Color(UI.MUTED, ease_in), font_body)
+			text_center(rect.position + Vector2(text_x, line_y + l * 34.0), lines[l], fit_size(lines[l], 25, text_width), Color(UI.MUTED, ease_in), font_body)
 		if has_hint:
 			var hint_text := String(hint["text"])
 			var hint_color: Color = hint["color"]
@@ -1755,7 +1783,7 @@ func _draw_build(top: float, max_rows: int) -> void:
 	for id in owned:
 		var level: int = sim.levels[id]
 		var label := t("perk_" + id) if level <= 1 else "%s %d" % [t("perk_" + id), level]
-		var width: float = minf(font_body.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, CHIP_SIZE).x + 26.0, right - left)
+		var width: float = minf(font_body.get_string_size(label, HORIZONTAL_ALIGNMENT_LEFT, -1, CHIP_SIZE).x + 54.0, right - left)
 		if x + width > right:
 			x = left
 			y += CHIP_H + CHIP_GAP
@@ -1765,7 +1793,8 @@ func _draw_build(top: float, max_rows: int) -> void:
 		var chip := Rect2(x, y, width, CHIP_H)
 		var color: Color = UI.RARITY[int(Perks.PERKS[id]["rarity"])]
 		panel(chip, Color(color, 0.14), CHIP_H / 2.0, Color(color, 0.8 if Perks.is_evolution(id) else 0.4), 2)
-		text_center(chip.get_center(), label, fit_size(label, CHIP_SIZE, width - 20.0), color, font_body)
+		PerkArt.draw(canvas, id, chip.position + Vector2(22.0, CHIP_H / 2.0), CHIP_ICON_RADIUS)
+		text_center(chip.get_center() + Vector2(14.0, 0.0), label, fit_size(label, CHIP_SIZE, width - 48.0), color, font_body)
 		x += width + CHIP_GAP
 
 

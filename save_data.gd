@@ -9,6 +9,7 @@ const Shop := preload("res://data/shop.gd")
 const StarTree := preload("res://data/star_tree.gd")
 
 const DEFAULT_PATH := "user://save.json"
+const VOLUME_MAX := 10
 const COINS_PER_STAR_SQUARED := 6000.0
 const STAR_DAMAGE := 0.25
 const POWER_BASE := 100.0
@@ -19,9 +20,10 @@ const MAX_TIER_XP := 10
 
 var path := DEFAULT_PATH
 var lang := I18n.DEFAULT_LANG
-var sound := true
+## Volumes run from 0 (off) to VOLUME_MAX.
+var sfx_volume := 7
 var vibration := true
-var music := true
+var music_volume := 5
 var reduce_fx := false
 var tutorial_done := false
 
@@ -59,9 +61,12 @@ func load_file() -> void:
 	var data: Dictionary = parsed
 	var saved_lang := String(data.get("lang", lang))
 	lang = saved_lang if I18n.LANGS.has(saved_lang) else I18n.DEFAULT_LANG
-	sound = bool(data.get("sound", sound))
+	# Older saves stored on/off switches, and an "off" should stay off.
+	var old_sound_on := bool(data.get("sound", true))
+	sfx_volume = clampi(int(data.get("sfx_volume", sfx_volume if old_sound_on else 0)), 0, VOLUME_MAX)
 	vibration = bool(data.get("vibration", vibration))
-	music = bool(data.get("music", music))
+	var old_music_on := bool(data.get("music", true))
+	music_volume = clampi(int(data.get("music_volume", music_volume if old_music_on else 0)), 0, VOLUME_MAX)
 	reduce_fx = bool(data.get("reduce_fx", reduce_fx))
 	tutorial_done = bool(data.get("tutorial_done", tutorial_done))
 	coins = int(data.get("coins", coins))
@@ -133,9 +138,9 @@ func save_file() -> bool:
 		return false
 	file.store_string(JSON.stringify({
 		"lang": lang,
-		"sound": sound,
+		"sfx_volume": sfx_volume,
 		"vibration": vibration,
-		"music": music,
+		"music_volume": music_volume,
 		"reduce_fx": reduce_fx,
 		"tutorial_done": tutorial_done,
 		"coins": coins,

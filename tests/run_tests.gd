@@ -12,6 +12,7 @@ const Tiers := preload("res://data/tiers.gd")
 const Achievements := preload("res://data/achievements.gd")
 const Music := preload("res://music.gd")
 const StarTree := preload("res://data/star_tree.gd")
+const PerkArt := preload("res://perk_art.gd")
 const DT := 1.0 / 60.0
 
 var failures := 0
@@ -65,6 +66,8 @@ func _init() -> void:
 	_test_star_tree()
 	_test_ball_mastery()
 	_test_overkill()
+	_test_old_sound_switches_carry_over()
+	_test_perk_icons()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -1145,9 +1148,10 @@ func _test_save_round_trip() -> void:
 	var path := _temp_save_path("round_trip")
 	var fresh := SaveData.new(path)
 	fresh.load_file()
-	_check(fresh.lang == "ja" and fresh.sound and fresh.best_damage == 0, "with no file, settings are the defaults")
+	_check(fresh.lang == "ja" and fresh.sfx_volume > 0 and fresh.best_damage == 0, "with no file, settings are the defaults")
 	fresh.lang = "en"
-	fresh.sound = false
+	fresh.sfx_volume = 3
+	fresh.music_volume = 0
 	fresh.record_run(_summary(123, true))
 	fresh.coins = 500
 	fresh.buy("damage")
@@ -1159,7 +1163,7 @@ func _test_save_round_trip() -> void:
 	_check(fresh.save_file(), "saving succeeds")
 	var loaded := SaveData.new(path)
 	loaded.load_file()
-	_check(loaded.lang == "en" and not loaded.sound, "settings survive a reload")
+	_check(loaded.lang == "en" and loaded.sfx_volume == 3 and loaded.music_volume == 0, "settings survive a reload")
 	_check(loaded.best_damage == 123 and loaded.wins == 1 and loaded.runs == 1, "records survive a reload")
 	_check(loaded.coins == fresh.coins and loaded.shop_level("damage") == 1 and loaded.stars == 3, "wallet, shop and stars survive a reload")
 	_check(loaded.achievements == fresh.achievements and loaded.perks_seen.has("split"), "achievements and codex survive a reload")
@@ -1353,6 +1357,41 @@ func _test_overkill() -> void:
 	var before_dot: int = sim.counters["overkills"]
 	sim._damage_block(Vector2i(3, 2), 1000.0, {"dot": true})
 	_check(sim.counters["overkills"] == before_dot, "damage over time never crushes")
+
+
+func _test_old_sound_switches_carry_over() -> void:
+	var path := _temp_save_path("old_sound")
+	var file := FileAccess.open(path, FileAccess.WRITE)
+	file.store_string("{\"sound\": false, \"music\": true}")
+	file.close()
+	var data := SaveData.new(path)
+	data.load_file()
+	_check(data.sfx_volume == 0 and data.music_volume > 0, "sound that was switched off stays off")
+	file = FileAccess.open(path, FileAccess.WRITE)
+	file.store_string("{\"sfx_volume\": 99}")
+	file.close()
+	data = SaveData.new(path)
+	data.load_file()
+	_check(data.sfx_volume == SaveData.VOLUME_MAX, "a volume out of range is clamped")
+	DirAccess.remove_absolute(path)
+
+
+func _test_perk_icons() -> void:
+	var missing: Array[String] = []
+	for id in Perks.ids():
+		if not Perks.is_evolution(id) and (not PerkArt.ICONS.has(id) or not PerkArt.GLYPHS.has(PerkArt.ICONS[id][0])):
+			missing.append(id)
+	_check(missing.is_empty(), "every perk has an icon %s" % str(missing))
+	var bad: Array[String] = []
+	for glyph: String in PerkArt.GLYPHS:
+		for shape: Array in PerkArt.GLYPHS[glyph]:
+			if String(shape[0]).ends_with("poly") and Geometry2D.triangulate_polygon(PerkArt._points(shape[1], Vector2.ZERO, 100.0)).is_empty():
+				bad.append(glyph)
+	_check(bad.is_empty(), "every icon polygon can be drawn %s" % str(bad))
+	var ok := true
+	for tag in Perks.TAGS:
+		ok = ok and PerkArt.TAG_COLORS.has(tag)
+	_check(ok, "every build has an icon colour")
 
 
 func _test_next_unlock() -> void:

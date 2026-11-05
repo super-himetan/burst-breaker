@@ -9,9 +9,11 @@
 - 強化60種（進化12種を含む）と、実績による段階的な解放
 - 9系統のビルド：持っている系統の強化が出やすくなり、カードに進化への道筋が出る
 - 玉8種、特殊ブロック7種、個性の違うボス6体（登場演出とセリフつき）
-- コインで買える永続強化のショップ
-- 上限のない難易度と、転生による星の倍率
-- 実績129個と図鑑（ボスのページつき）
+- コインで買える永続強化のショップ（節目ボーナス、まとめ買い、買い切り後の限界突破）
+- 上限のない難易度と、転生で得た星を振り分けるスキルツリー
+- 使った玉ごとに育つ熟練度
+- 格下のブロックを粉砕したときのコイン報酬
+- 実績139個と図鑑（ボスのページつき）
 - 玉ごとに違う必殺技「バースト」
 
 ## Mac での操作
@@ -56,7 +58,7 @@ mkdir -p build/ios && touch build/.gdignore && /Applications/Godot.app/Contents/
 /Applications/Godot.app/Contents/MacOS/Godot --headless --path . -s tests/run_tests.gd
 ```
 
-実際の入力イベントで通しプレイし、スクリーンショットと `report.json` を保存します。
+実際の入力イベントで通しプレイし、スクリーンショットと `report.json` を保存します。音量設定に関わらず無音で動きます。
 
 ```bash
 /Applications/Godot.app/Contents/MacOS/Godot --path . --always-on-top -- --verify="$PWD/verify-output"
@@ -75,6 +77,8 @@ mkdir -p build/ios && touch build/.gdignore && /Applications/Godot.app/Contents/
 - `i18n.gd`: 表示テキスト（日本語が基本で、英語も選べる）
 - `save_data.gd`: 設定と記録の保存
 - `music.gd`: コードで生成する BGM
+- `perk_art.gd`: 強化カードのアイコン
+- `data/star_tree.gd`: 星のスキルツリー
 - `menus.gd`: ゲーム以外の各画面
 - `verify.gd`: 実際の入力で全画面を通す確認
 - `data/`: 強化、玉、ショップ、難易度、実績の定義

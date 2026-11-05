@@ -9,6 +9,7 @@ const Balls := preload("res://data/balls.gd")
 const Bosses := preload("res://data/bosses.gd")
 const BossArt := preload("res://boss_art.gd")
 const Perks := preload("res://data/perks.gd")
+const PerkArt := preload("res://perk_art.gd")
 const Shop := preload("res://data/shop.gd")
 const StarTree := preload("res://data/star_tree.gd")
 const Tiers := preload("res://data/tiers.gd")
@@ -140,8 +141,8 @@ func buttons(screen: int) -> Array[Dictionary]:
 		Screen.SETTINGS:
 			list.append(_button("lang_ja", Rect2(70.0, 340.0, 280.0, 100.0), "日本語", "selected" if save.lang == "ja" else "normal"))
 			list.append(_button("lang_en", Rect2(370.0, 340.0, 280.0, 100.0), "English", "selected" if save.lang == "en" else "normal"))
-			list.append(_button("sound", Rect2(70.0, 490.0, 580.0, 100.0), "%s : %s" % [t("sound"), t("on" if save.sound else "off")]))
-			list.append(_button("music", Rect2(70.0, 610.0, 580.0, 100.0), "%s : %s" % [t("music"), t("on" if save.music else "off")]))
+			_add_volume_buttons(list, "sound", 490.0, save.sfx_volume)
+			_add_volume_buttons(list, "music", 610.0, save.music_volume)
 			list.append(_button("vibration", Rect2(70.0, 730.0, 580.0, 100.0), "%s : %s" % [t("vibration"), t("on" if save.vibration else "off")]))
 			list.append(_button("reduce_fx", Rect2(70.0, 850.0, 580.0, 100.0), "%s : %s" % [t("reduce_fx"), t("on" if save.reduce_fx else "off")]))
 			list.append(_button("back", Rect2(160.0, 1090.0, 400.0, 96.0), t("back")))
@@ -181,6 +182,18 @@ func buttons(screen: int) -> Array[Dictionary]:
 				list.append(_button("stars", Rect2(90.0, 930.0, 540.0, 100.0), t("stars_tree"), "normal" if int(save.stars) > 0 else "disabled"))
 				list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
 	return list
+
+
+func _add_volume_buttons(list: Array[Dictionary], id: String, y: float, volume: int) -> void:
+	list.append(_button(id + "_down", Rect2(70.0, y, 110.0, 100.0), "−", "normal" if volume > 0 else "disabled"))
+	list.append(_button(id + "_up", Rect2(540.0, y, 110.0, 100.0), "+", "normal" if volume < save.VOLUME_MAX else "disabled"))
+
+
+func _draw_volume(key: String, y: float, volume: int) -> void:
+	var value: String = t("off") if volume == 0 else "%d%%" % (volume * 100 / int(save.VOLUME_MAX))
+	var label := "%s : %s" % [t(key), value]
+	host.panel(Rect2(70.0, y, 580.0, 100.0), UI.PANEL, 50.0, UI.LINE, 2)
+	host.text_center(Vector2(BASE_W / 2.0, y + 50.0), label, host.fit_size(label, 30, 340.0), UI.TEXT)
 
 
 func _ball_label(id: String) -> String:
@@ -277,6 +290,8 @@ func draw(screen: int) -> void:
 		Screen.SETTINGS:
 			_heading(t("settings"), 130.0)
 			host.text_center(Vector2(BASE_W / 2.0, 295.0), t("language"), 24, UI.MUTED, host.font_label)
+			_draw_volume("sound", 490.0, save.sfx_volume)
+			_draw_volume("music", 610.0, save.music_volume)
 		Screen.LOADOUT:
 			_draw_loadout()
 		Screen.SHOP:
@@ -374,7 +389,8 @@ func _draw_milestone() -> void:
 	var alpha := minf(_milestone_time * 3.0, 1.0)
 	var pop := 1.0 + maxf(0.18 - age, 0.0) * 2.0
 	var center := Vector2(BASE_W / 2.0, 640.0)
-	host.soft_glow(center, Vector2(1000.0, 460.0), Color(UI.GOLD, 0.4 * alpha))
+	host.panel(Rect2(0.0, center.y - 110.0, BASE_W, 220.0), Color(UI.INK, 0.85 * alpha), 0.0)
+	host.soft_glow(center, Vector2(1000.0, 460.0), Color(UI.GOLD, 0.3 * alpha))
 	var title := t("level") % save.shop_level(_milestone_id) + "  " + t("shop_" + _milestone_id)
 	host.text_shadowed(center + Vector2(0.0, -44.0), title, int(host.fit_size(title, 46, 640.0) * pop), Color(UI.TEXT, alpha))
 	var bonus := t("shop_%s_bonus" % _milestone_id)
@@ -603,15 +619,16 @@ func _draw_codex_perk(id: String, y: float) -> void:
 		if hint != "":
 			host.text_left(Vector2(70.0, y + 76.0), hint, host.fit_size(hint, 22, 580.0), Color(UI.MUTED, 0.8), host.font_body)
 		return
+	PerkArt.draw(host.canvas, id, Vector2(92.0, y + CODEX_ROW_H / 2.0), 34.0)
 	var name_text := t("perk_" + id)
-	host.text_left(Vector2(70.0, y + 36.0), name_text, host.fit_size(name_text, 28, 250.0), color)
+	host.text_left(Vector2(142.0, y + 36.0), name_text, host.fit_size(name_text, 28, 210.0), color)
 	var kind: String = t("rarity_%d" % rarity)
 	if Perks.is_evolution(id):
 		var parents: Array = Perks.PERKS[id]["requires"]
 		kind = t("evolve_recipe") % [t("perk_" + String(parents[0])), t("perk_" + String(parents[1]))]
-	host.text_right(Vector2(650.0, y + 36.0), kind, host.fit_size(kind, 20, 310.0), UI.MUTED, host.font_body)
+	host.text_right(Vector2(650.0, y + 36.0), kind, host.fit_size(kind, 20, 290.0), UI.MUTED, host.font_body)
 	var desc := t("perk_%s_desc" % id).replace("\n", " ")
-	host.text_left(Vector2(70.0, y + 76.0), desc, host.fit_size(desc, 23, 580.0), UI.TEXT, host.font_body)
+	host.text_left(Vector2(142.0, y + 76.0), desc, host.fit_size(desc, 23, 510.0), UI.TEXT, host.font_body)
 
 
 func _perk_hint(id: String) -> String:
