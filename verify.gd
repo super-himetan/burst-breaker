@@ -137,7 +137,7 @@ func _verify_play() -> void:
 					await _shot("07_chaos_ja")
 				await _wait(0.03)
 			GameSim.State.UPGRADE:
-				await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
+				await _wait_until(func() -> bool: return host.boss_down <= 0.0 and host.evolve_cut < 0.0, 6000)
 				await _wait(0.45)
 				if not saved.has("upgrade"):
 					saved["upgrade"] = true
@@ -150,7 +150,10 @@ func _verify_play() -> void:
 				var before: int = host.sim.picks_pending
 				var stage_before: int = host.sim.stage
 				await _tap_at(host.card_rect(index, host.sim.choices.size()).get_center())
-				_check("upgrade_card_tap", host.sim.picks_pending < before or host.sim.stage > stage_before)
+				var picked: bool = host.sim.picks_pending < before or host.sim.stage > stage_before
+				if not picked:
+					print("verify: card tap ignored state=%d age=%.2f evolve=%.2f paused=%s" % [host.sim.state, host.screen_age, host.evolve_cut, host.paused])
+				_check("upgrade_card_tap", picked)
 	if host.sim.counters["kills"] <= 0:
 		_check("blocks_were_broken", false)
 	_check("shots_are_ranked", host.sim._style_shots > 0)

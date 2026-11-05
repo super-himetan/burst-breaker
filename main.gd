@@ -43,6 +43,7 @@ const COUNT_UP_SECONDS := 1.0
 const COUNT_UP_TICK := 0.07
 const OVERKILL_TEXT_GAP := 0.12
 const CARD_ICON_MAX := 120.0
+const KIND_BORDER := 4
 const CHIP_ICON_RADIUS := 12.0
 ## The last target slows time, and destroying it nearly stops it.
 const TENSION_SLOW := 0.45
@@ -1688,7 +1689,7 @@ func _draw_blocks() -> void:
 		var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
 		# A struck block swells for a moment, so every hit has weight.
 		var drawn := rect.grow(hit * 3.0)
-		_draw_block_body(kind, drawn, _block_color(block))
+		_draw_block_body(kind, drawn, _block_color(block), _block_border(block))
 		if block.has("post"):
 			panel(drawn, Color.TRANSPARENT, 14.0, Color("8be9fd"), 3)
 		if hit > 0.0:
@@ -1697,42 +1698,44 @@ func _draw_blocks() -> void:
 			canvas.draw_circle(rect.position + Vector2(rect.size.x - 11.0, 12.0), 5.0, Color("2f9e44"))
 		if block["burning"]:
 			canvas.draw_circle(rect.position + Vector2(rect.size.x - 11.0, rect.size.y - 12.0), 5.0, Color("e8590c"))
-		var hp_text := I18n.format_number(block["hp"])
-		var ink: Color = UI.TEXT if kind == "armor" else UI.INK
-		text_center(rect.get_center() + Vector2(0.0, 2.0), hp_text, fit_size(hp_text, 27, rect.size.x - 20.0), ink)
 
 
-## Base look of a block, shared with the codex.
-func _draw_block_body(kind: String, rect: Rect2, color: Color) -> void:
+## Base look of a block, shared with the codex. The body's colour belongs to its health,
+## so a block's kind has to read from its border and its centre icon.
+func _draw_block_body(kind: String, rect: Rect2, color: Color, border := Color.TRANSPARENT) -> void:
 	panel(rect, color, 14.0)
 	panel(Rect2(rect.position + Vector2(4.0, 3.0), Vector2(rect.size.x - 8.0, rect.size.y * 0.4)), Color(1.0, 1.0, 1.0, 0.2), 10.0)
-	# Icons sit in a corner so large HP numbers stay readable.
-	var corner := rect.position + Vector2(14.0, 14.0)
+	if border.a > 0.0:
+		panel(rect, Color.TRANSPARENT, 14.0, border, KIND_BORDER)
+	var c := rect.get_center()
 	match kind:
 		"bomb":
-			canvas.draw_circle(corner, 6.0, UI.INK)
-			canvas.draw_line(corner + Vector2(3.0, -4.0), corner + Vector2(7.0, -9.0), UI.INK, 2.0)
+			canvas.draw_circle(c + Vector2(-1.0, 2.0), 12.0, UI.INK)
+			canvas.draw_line(c + Vector2(5.0, -7.0), c + Vector2(11.0, -14.0), UI.INK, 3.0)
 		"shield":
-			panel(rect, Color.TRANSPARENT, 14.0, Color.WHITE, 4)
+			canvas.draw_colored_polygon(PackedVector2Array([c + Vector2(0.0, -15.0), c + Vector2(13.0, -10.0), c + Vector2(11.0, 4.0), c + Vector2(0.0, 15.0), c + Vector2(-11.0, 4.0), c + Vector2(-13.0, -10.0)]), UI.INK)
 		"armor":
-			panel(rect, Color.TRANSPARENT, 14.0, Color("2b2f45"), 6)
+			canvas.draw_rect(Rect2(c + Vector2(-13.0, -11.0), Vector2(26.0, 22.0)), UI.INK, false, 4.0)
+			canvas.draw_line(c + Vector2(-13.0, 0.0), c + Vector2(13.0, 0.0), UI.INK, 3.0)
 		"regen":
-			canvas.draw_rect(Rect2(corner + Vector2(-6.0, -2.0), Vector2(12.0, 4.0)), UI.INK)
-			canvas.draw_rect(Rect2(corner + Vector2(-2.0, -6.0), Vector2(4.0, 12.0)), UI.INK)
+			canvas.draw_rect(Rect2(c + Vector2(-12.0, -4.0), Vector2(24.0, 8.0)), UI.INK)
+			canvas.draw_rect(Rect2(c + Vector2(-4.0, -12.0), Vector2(8.0, 24.0)), UI.INK)
 		"treasure":
-			panel(Rect2(corner + Vector2(-7.0, -5.0), Vector2(14.0, 11.0)), Color("8a5a00"), 3.0)
+			panel(Rect2(c + Vector2(-14.0, -11.0), Vector2(28.0, 22.0)), UI.INK, 5.0)
+			canvas.draw_circle(c, 4.0, UI.GOLD)
 		"breeder":
-			canvas.draw_circle(corner + Vector2(-3.0, 0.0), 4.0, UI.INK)
-			canvas.draw_circle(corner + Vector2(6.0, 0.0), 4.0, UI.INK)
+			canvas.draw_circle(c + Vector2(-7.0, 0.0), 8.0, UI.INK)
+			canvas.draw_circle(c + Vector2(9.0, 0.0), 8.0, UI.INK)
 		"extra_ball":
-			canvas.draw_circle(corner, 7.0, Color("3b82f6"))
+			canvas.draw_circle(c, 13.0, UI.INK)
+			canvas.draw_circle(c, 8.0, Color.WHITE)
 
 
 func draw_block_icon(kind: String, rect: Rect2) -> void:
 	if kind == "boss":
 		BossArt.draw(canvas, "purun", rect, "idle", time)
 		return
-	_draw_block_body(kind, rect, UI.BLOCKS.get(kind, UI.RAMP[1]))
+	_draw_block_body(kind, rect, UI.RAMP[1], UI.BLOCKS.get(kind, Color.TRANSPARENT))
 
 
 func _draw_boss(block: Dictionary, rect: Rect2) -> void:
@@ -1758,19 +1761,18 @@ func _draw_boss(block: Dictionary, rect: Rect2) -> void:
 	var bar := Rect2(rect.position + Vector2(14.0, rect.size.y - 28.0), Vector2(rect.size.x - 28.0, 22.0))
 	panel(bar, Color(0.0, 0.0, 0.0, 0.62), 11.0)
 	panel(Rect2(bar.position, Vector2(maxf(bar.size.x * ratio, 16.0), bar.size.y)), UI.DANGER if angry else UI.GOLD, 11.0)
-	var hp_text := I18n.format_number(block["hp"])
-	text_center(bar.get_center() + Vector2(1.0, 2.5), hp_text, 20, Color(0.0, 0.0, 0.0, 0.85))
-	text_center(bar.get_center() + Vector2(0.0, 1.0), hp_text, 20, Color.WHITE)
 
 
+## Colour is the health readout: the hotter the block, the more it still takes to break.
 func _block_color(block: Dictionary) -> Color:
-	if block.has("tint"):
-		return Bosses.color("purun")
-	var kind: String = block["kind"]
-	if UI.BLOCKS.has(kind):
-		return UI.BLOCKS[kind]
 	var top: float = float(GameSim.STAGES[sim.stage]["hp_max"]) * GameSim.Tiers.hp_scale(sim.tier)
 	return UI.ramp(float(block["hp"]) / top)
+
+
+func _block_border(block: Dictionary) -> Color:
+	if block.has("tint"):
+		return Bosses.color("purun")
+	return UI.BLOCKS.get(block["kind"], Color.TRANSPARENT)
 
 
 func _combo_color(combo: int) -> Color:

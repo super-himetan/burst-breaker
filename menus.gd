@@ -28,6 +28,7 @@ const CODEX_ROW_H := 110.0
 const BLOCK_KINDS: Array[String] = ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]
 const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses"]
 const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
+const HOWTO_STEPS := 6
 const BUY_ALL_STEP := 0.07
 const MILESTONE_HOLD := 0.55
 const MILESTONE_SECONDS := 1.3
@@ -470,14 +471,14 @@ func _draw_title() -> void:
 
 func _draw_howto() -> void:
 	_heading(t("howto"), 130.0)
-	for i in 5:
-		var y := 240.0 + i * 158.0
-		host.panel(Rect2(50.0, y, 620.0, 138.0), UI.PANEL, 28.0, UI.LINE, 2)
-		var color: Color = UI.RAMP[i]
-		host.canvas.draw_circle(Vector2(112.0, y + 69.0), 36.0, color)
-		host.text_center(Vector2(112.0, y + 71.0), str(i + 1), 36, UI.INK)
+	for i in HOWTO_STEPS:
+		var y := 220.0 + i * 140.0
+		host.panel(Rect2(50.0, y, 620.0, 124.0), UI.PANEL, 28.0, UI.LINE, 2)
+		var color: Color = UI.RAMP[i % UI.RAMP.size()]
+		host.canvas.draw_circle(Vector2(112.0, y + 62.0), 34.0, color)
+		host.text_center(Vector2(112.0, y + 64.0), str(i + 1), 34, UI.INK)
 		var line := t("howto_%d" % (i + 1))
-		host.text_left(Vector2(170.0, y + 69.0), line, host.fit_size(line, 30, 480.0), UI.TEXT)
+		host.text_left(Vector2(170.0, y + 62.0), line, host.fit_size(line, 30, 480.0), UI.TEXT)
 
 
 func _draw_loadout() -> void:
