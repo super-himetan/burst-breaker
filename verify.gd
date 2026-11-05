@@ -156,6 +156,8 @@ func _verify_play() -> void:
 					print("verify: card tap ignored state=%d age=%.2f evolve=%.2f paused=%s" % [host.sim.state, host.screen_age, host.evolve_cut, host.paused])
 				_check("upgrade_card_tap", picked)
 			GameSim.State.ROUTE:
+				# A tap during an evolution's scene only skips the scene, as it should.
+				await _wait_until(func() -> bool: return host.boss_down <= 0.0 and host.evolve_cut < 0.0, 6000)
 				await _wait(0.45)
 				if not saved.has("route"):
 					saved["route"] = true
@@ -163,8 +165,11 @@ func _verify_play() -> void:
 				var stage_at: int = host.sim.stage
 				await _tap_at(host.card_rect(0, host.sim.route_options.size()).get_center())
 				await _wait(0.05)
+				if host.sim.state == GameSim.State.ROUTE and host.sim.stage == stage_at:
+					print("verify: route tap ignored age=%.2f evolve=%.2f down=%.2f paused=%s" % [host.screen_age, host.evolve_cut, host.boss_down, host.paused])
 				_check("route_card_tap", host.sim.state != GameSim.State.ROUTE or host.sim.stage > stage_at)
 			GameSim.State.EVENT:
+				await _wait_until(func() -> bool: return host.boss_down <= 0.0 and host.evolve_cut < 0.0, 6000)
 				await _wait(0.45)
 				var event_kind: String = host.sim.event["kind"]
 				if not saved.has("event_" + event_kind):
