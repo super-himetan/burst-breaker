@@ -10,6 +10,7 @@ const Balls := preload("res://data/balls.gd")
 const Shop := preload("res://data/shop.gd")
 const Tiers := preload("res://data/tiers.gd")
 const Achievements := preload("res://data/achievements.gd")
+const Music := preload("res://music.gd")
 const DT := 1.0 / 60.0
 
 var failures := 0
@@ -55,6 +56,9 @@ func _init() -> void:
 	_test_damaged_save_uses_defaults()
 	_test_interrupted_run_keeps_its_coins()
 	_test_next_unlock()
+	_test_burn_is_gentler_on_bosses()
+	_test_only_moved_blocks_slide()
+	_test_music_loop()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -1179,6 +1183,46 @@ func _test_interrupted_run_keeps_its_coins() -> void:
 	damaged.load_file()
 	_check(damaged.coins == 9 and damaged.recover_interrupted_run() == -1, "a damaged stash is ignored and the save is kept")
 	DirAccess.remove_absolute(path)
+
+
+func _test_burn_is_gentler_on_bosses() -> void:
+	var sim := _sim()
+	_give(sim, "burn", 1)
+	sim.stage = 3
+	sim.boss_force = "purun"
+	sim._start_stage()
+	var boss: Dictionary = sim.boss_block
+	boss["burning"] = true
+	var before := int(boss["hp"])
+	sim._apply_end_of_shot()
+	var expected := int(float(boss["max_hp"]) * 0.06 * GameSim.BOSS_BURN_SCALE)
+	_check(absi(before - int(boss["hp"]) - expected) <= 1, "bosses take a quarter of burn damage")
+
+
+func _test_only_moved_blocks_slide() -> void:
+	var sim := _sim()
+	sim.stage = 3
+	sim.boss_force = "purun"
+	sim._start_stage()
+	var boss: Dictionary = sim.boss_block
+	boss["every"] = 3
+	boss["age"] = 0
+	sim._descend()
+	_check(not boss["slid"], "a boss that stays put does not slide")
+	boss["age"] = 2
+	sim._descend()
+	_check(boss["slid"], "a boss that steps down slides")
+
+
+func _test_music_loop() -> void:
+	var pcm := Music.render_pcm()
+	var samples := pcm.size() / 2
+	_check(samples == Music.step_samples() * Music.STEPS_PER_BAR * Music.CHORDS.size(), "the music is exactly the length of its bars")
+	var loudest := 0
+	for i in samples:
+		loudest = maxi(loudest, absi(pcm.decode_s16(i * 2)))
+	_check(loudest > 20000 and loudest < 32000, "the music is audible and does not clip")
+	_check(absi(pcm.decode_s16(0) - pcm.decode_s16((samples - 1) * 2)) < 6000, "the music has no jump where it loops")
 
 
 func _test_next_unlock() -> void:

@@ -63,6 +63,13 @@ func _verify_settings() -> void:
 	await _tap_button("vibration")
 	_check("vibration_toggles", not host.save.vibration)
 	await _tap_button("vibration")
+	await _tap_button("music")
+	_check("music_toggles_off", not host.save.music)
+	await _tap_button("music")
+	_check("music_toggles_on", host.save.music)
+	await _tap_button("reduce_fx")
+	_check("reduce_fx_toggles", host.save.reduce_fx and host._fx_scale() < 1.0)
+	await _tap_button("reduce_fx")
 	await _tap_button("lang_en")
 	_check("language_switches", host.save.lang == "en")
 	var reloaded := SaveData.new(host.save.path)
@@ -409,6 +416,10 @@ func _verify_english() -> void:
 	await _tap_button("back")
 	await _tap_button("achievements")
 	await _shot("33_achievements_en")
+	await _wait(0.4)
+	_wheel(MOUSE_BUTTON_WHEEL_DOWN)
+	await _wait(0.05)
+	_check("mouse_wheel_scrolls_lists", host.menus.scroll > 0.0)
 	await _tap_button("back")
 	host.save.mark_perk_seen("double_split")
 	await _tap_button("codex")
@@ -433,10 +444,19 @@ func _verify_english() -> void:
 	sim.choices = ["e_inferno", "aimbot", "gambler", "extra_choice"] as Array[String]
 	await _wait(0.5)
 	await _shot("39_upgrade_en")
+	_key(KEY_1)
+	await _wait(0.05)
+	_check("number_key_picks_a_card", sim.levels["e_inferno"] == 1)
 	sim.total_damage = 1
 	sim.state = GameSim.State.LOST
 	await _wait(0.5)
 	await _shot("40_end_en")
+	_key(KEY_R)
+	await _wait(0.05)
+	_check("r_key_retries", not host.is_run_over())
+	sim.total_damage = 1
+	sim.state = GameSim.State.LOST
+	await _wait(0.5)
 	await _tap_button("to_title")
 	_check("end_to_title", host.screen == Menus.Screen.TITLE)
 	await _tap_button("settings")
@@ -511,6 +531,20 @@ func _shot(name_: String) -> void:
 
 func _to_window(world: Vector2) -> Vector2:
 	return host.get_viewport().get_final_transform() * (world + Vector2(0.0, host.y_offset))
+
+
+func _key(keycode: int) -> void:
+	var e := InputEventKey.new()
+	e.keycode = keycode
+	e.pressed = true
+	Input.parse_input_event(e)
+
+
+func _wheel(button: int) -> void:
+	var e := InputEventMouseButton.new()
+	e.button_index = button
+	e.pressed = true
+	Input.parse_input_event(e)
 
 
 func _touch(world: Vector2, pressed: bool) -> void:

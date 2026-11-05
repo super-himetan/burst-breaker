@@ -7,6 +7,7 @@ const I18n := preload("res://i18n.gd")
 const SaveData := preload("res://save_data.gd")
 const Menus := preload("res://menus.gd")
 const Verify := preload("res://verify.gd")
+const Music := preload("res://music.gd")
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
 const Bosses := preload("res://data/bosses.gd")
@@ -32,6 +33,10 @@ const BOSS_DOWN_HOLD := 1.7
 const SPEECH_SECONDS := 2.6
 const SPEECH_COOLDOWN := 7.0
 const BOSS_HEAL_COLOR := Color("7dffb0")
+const MUSIC_VOLUME_DB := -13.0
+const REDUCED_FX_SCALE := 0.25
+const WHEEL_SCROLL := 70.0
+const PAN_SCROLL := 24.0
 
 var sim: GameSim
 var save: SaveData
@@ -113,6 +118,9 @@ var _pending_dots: Array[Dictionary] = []
 var sounds := {}
 var players: Array[AudioStreamPlayer] = []
 var next_player := 0
+var music_player: AudioStreamPlayer
+var music_task := -1
+var music_pcm := PackedByteArray()
 var verify_stats := {"max_balls": 0, "explosions": 0, "splits": 0}
 
 
@@ -142,6 +150,8 @@ func _ready() -> void:
 	save.load_file()
 	menus = Menus.new(self, save)
 	_apply_sound()
+	# Rendering the loop takes a moment, so it must not hold up the first frame.
+	music_task = WorkerThreadPool.add_task(func() -> void: music_pcm = Music.render_pcm())
 	sim = GameSim.new()
 	_recover_interrupted_run()
 	if verify_dir != "":
@@ -393,15 +403,40 @@ func _apply_sound() -> void:
 	AudioServer.set_bus_mute(0, not save.sound)
 
 
+func _apply_music() -> void:
+	if music_player.stream != null:
+		music_player.stream_paused = not save.music
+
+
+## Starts the loop once the background render has finished.
+func _poll_music() -> void:
+	if music_task < 0 or not WorkerThreadPool.is_task_completed(music_task):
+		return
+	WorkerThreadPool.wait_for_task_completion(music_task)
+	music_task = -1
+	var stream := _wav(music_pcm)
+	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+	stream.loop_end = music_pcm.size() / 2
+	music_player.stream = stream
+	music_player.play()
+	_apply_music()
+
+
+func _exit_tree() -> void:
+	if music_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(music_task)
+
+
 func _process(delta: float) -> void:
 	time += delta
+	_poll_music()
 	var view := get_viewport_rect().size
 	y_offset = maxf((view.y - BASE_H) / 2.0, 0.0)
 	screen_age += delta
 	if screen == Menus.Screen.GAME and not paused:
 		_process_game(delta)
 	_update_fx(delta)
-	var shake := trauma * trauma * 24.0
+	var shake := trauma * trauma * 24.0 * _fx_scale()
 	var offset := Vector2(randf_range(-shake, shake), randf_range(-shake, shake))
 	position = Vector2(0.0, y_offset) + offset
 	# The interface stays steady while the playfield shakes under it.
@@ -414,7 +449,7 @@ func _process(delta: float) -> void:
 	impact = maxf(impact - delta * 0.11, 0.0)
 	burst_after = maxf(burst_after - delta, 0.0)
 	impact_rect.visible = impact > 0.0005
-	impact_material.set_shader_parameter("amount", impact)
+	impact_material.set_shader_parameter("amount", impact * _fx_scale())
 	queue_redraw()
 	glow_layer.queue_redraw()
 	ui_layer.queue_redraw()
@@ -566,7 +601,24 @@ func _note_offered_perks() -> void:
 		on_progress_changed(_live_stats())
 
 
+func _fx_scale() -> float:
+	return REDUCED_FX_SCALE if save.reduce_fx else 1.0
+
+
 func _input(event: InputEvent) -> void:
+	if event is InputEventKey:
+		if event.pressed and not event.echo:
+			_on_key(event.keycode)
+		return
+	if event is InputEventMouseButton and event.pressed and menus.is_list_screen(screen):
+		if event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			menus.scroll_by(screen, WHEEL_SCROLL)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			menus.scroll_by(screen, -WHEEL_SCROLL)
+		return
+	if event is InputEventPanGesture and menus.is_list_screen(screen):
+		menus.scroll_by(screen, -event.delta.y * PAN_SCROLL)
+		return
 	if event is InputEventScreenTouch and event.index == 0:
 		var p: Vector2 = event.position - Vector2(0.0, y_offset)
 		if event.pressed:
@@ -584,6 +636,32 @@ func _input(event: InputEvent) -> void:
 		hovering = true
 		if not aiming:
 			aim_current = event.position - Vector2(0.0, y_offset)
+
+
+## Keyboard shortcuts for the desktop build. They go through the same checks as a tap.
+func _on_key(key: int) -> void:
+	match key:
+		KEY_ESCAPE:
+			if screen != Menus.Screen.TITLE:
+				_on_back_request()
+		KEY_SPACE, KEY_ENTER, KEY_R:
+			for id: String in ["restart", "resume", "burst"]:
+				if id == "restart" and paused:
+					continue
+				if _tap_button_by_id(id):
+					return
+		KEY_1, KEY_2, KEY_3, KEY_4:
+			var index: int = key - KEY_1
+			if screen == Menus.Screen.GAME and sim.state == GameSim.State.UPGRADE and index < sim.choices.size():
+				_on_press(card_rect(index, sim.choices.size()).get_center())
+
+
+func _tap_button_by_id(id: String) -> bool:
+	for button in current_buttons():
+		if button["id"] == id:
+			_on_press((button["rect"] as Rect2).get_center())
+			return true
+	return false
 
 
 func _on_press(p: Vector2) -> void:
@@ -690,6 +768,13 @@ func _press_button(id: String) -> void:
 			save.save_file()
 		"vibration":
 			save.vibration = not save.vibration
+			save.save_file()
+		"music":
+			save.music = not save.music
+			_apply_music()
+			save.save_file()
+		"reduce_fx":
+			save.reduce_fx = not save.reduce_fx
 			save.save_file()
 		"pause":
 			_set_paused(true)
@@ -1197,7 +1282,7 @@ func _draw_game_ui() -> void:
 		text_center(n["pos"], str(n["text"]), size, color)
 	_draw_hud()
 	if screen_flash > 0.0:
-		fill_screen(Color(1.0, 0.96, 0.9, screen_flash * 0.32))
+		fill_screen(Color(1.0, 0.96, 0.9, screen_flash * 0.32 * _fx_scale()))
 	if boss_down <= 0.0:
 		match sim.state:
 			GameSim.State.UPGRADE:
@@ -1318,7 +1403,9 @@ func _draw_blocks() -> void:
 	var slide := -descend_anim * GameSim.CELL_H
 	for block in sim.unique_blocks():
 		var rect := sim.block_rect(block)
-		rect.position.y += slide
+		# Anything that stayed put this turn, like a slow boss, must not appear to fall.
+		if block["slid"]:
+			rect.position.y += slide
 		var kind: String = block["kind"]
 		if kind == "boss":
 			_draw_boss(block, rect)
@@ -1473,6 +1560,8 @@ func _draw_hud() -> void:
 		text_center(chip.get_center(), t("tier_label") % sim.tier, fit_size(t("tier_label") % sim.tier, 17, 96.0), UI.ACCENT, font_body)
 	text_center(Vector2(BASE_W / 2.0, 58.0), t("hud_damage"), 18, UI.MUTED, font_label)
 	text_center(Vector2(BASE_W / 2.0, 98.0), I18n.format_number(sim.total_damage), 38, UI.TEXT)
+	if sim.waves_left > 0:
+		text_center(Vector2(BASE_W / 2.0, 134.0), t("hud_waves") % sim.waves_left, 20, UI.MINT, font_body)
 	var coin_size := int(36.0 + coin_pop * 14.0)
 	canvas.draw_circle(Vector2(575.0, 98.0), 13.0, UI.GOLD)
 	text_center(Vector2(640.0, 98.0), I18n.format_number(sim.coins), coin_size, UI.GOLD)
@@ -1727,6 +1816,9 @@ func _build_audio() -> void:
 		var player := AudioStreamPlayer.new()
 		add_child(player)
 		players.append(player)
+	music_player = AudioStreamPlayer.new()
+	music_player.volume_db = MUSIC_VOLUME_DB
+	add_child(music_player)
 
 
 func _play(id: String, pitch: float) -> void:

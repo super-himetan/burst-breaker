@@ -55,8 +55,10 @@ const MOGU_HEAL_PER_BITE := 0.02
 const GUARDED_DAMAGE := 0.25
 const GUARD_RETURN_TURNS := 3
 const GUARD_HP := 2.5
-const LUMINA_HEAL := 0.025
-const LUMINA_ANGRY_HEAL := 0.035
+const LUMINA_HEAL := 0.02
+const LUMINA_ANGRY_HEAL := 0.03
+## Burn takes a share of max HP, which would melt a boss at the rate that suits small blocks.
+const BOSS_BURN_SCALE := 0.25
 const DOKAN_THROWS := 2
 const ZERO_WALL_ROWS := 4
 ## Boss tricks never place blocks closer to the danger line than this.
@@ -506,6 +508,7 @@ func _new_block(hp: int, kind: String, origin: Vector2i, size := Vector2i.ONE) -
 		"size": size,
 		"poison": 0,
 		"burning": false,
+		"slid": true,
 	}
 	_next_block_id += 1
 	return block
@@ -979,7 +982,7 @@ func _on_kill_effects(cell: Vector2i, kind: String, flags: Dictionary) -> void:
 
 
 func _blast_damage() -> float:
-	return (3.0 + stat("flat_damage") + 3.0 * stage) * (1.0 + stat("bomb_damage")) * sqrt(Tiers.hp_scale(tier)) * 0.8
+	return (3.0 + stat("flat_damage") + 4.5 * stage) * (1.0 + stat("bomb_damage")) * sqrt(Tiers.hp_scale(tier)) * 0.8
 
 
 func _strike_random(count: int, damage: float) -> void:
@@ -1088,7 +1091,8 @@ func _apply_end_of_shot() -> void:
 			var damage := int(block["poison"]) * poison_scale
 			_damage_block(cell, _scale_damage(damage, block), {"dot": true, "poison": true})
 		if blocks.has(cell) and block["burning"]:
-			_damage_block(cell, float(block["max_hp"]) * stat("burn_pct"), {"dot": true})
+			var burn_scale := BOSS_BURN_SCALE if block["kind"] == "boss" else 1.0
+			_damage_block(cell, float(block["max_hp"]) * stat("burn_pct") * burn_scale, {"dot": true})
 		if blocks.has(cell) and block["kind"] == "regen":
 			block["hp"] = mini(int(block["hp"]) + maxi(int(float(block["max_hp"]) * regen_rate), 1), int(block["max_hp"]))
 			_emit({"type": "regen", "pos": block_rect(block).get_center()})
@@ -1134,17 +1138,20 @@ func _descend() -> void:
 	if boss_block != null:
 		var boss: Dictionary = boss_block
 		var origin: Vector2i = boss["origin"]
+		var old_y := origin.y
 		if boss_moves:
 			origin += Vector2i.DOWN
 		if boss["boss_id"] == "mogu":
 			origin = _strafe(boss, origin)
 		boss["origin"] = origin
+		boss["slid"] = origin.y != old_y
 		for y in BOSS_SIZE.y:
 			for x in BOSS_SIZE.x:
 				moved[origin + Vector2i(x, y)] = boss
 		# Bodyguards keep formation instead of drifting down with the rest.
 		for guard: Dictionary in _live_guards():
 			var post: Vector2i = origin + (guard["post"] as Vector2i)
+			guard["slid"] = post.y != (guard["origin"] as Vector2i).y
 			guard["origin"] = post
 			moved[post] = guard
 	# Bottom rows first, so blocks stack up against the boss instead of overlapping it.
@@ -1160,6 +1167,7 @@ func _descend() -> void:
 		if moved.has(target):
 			bites += 1
 			continue
+		block["slid"] = target != cell
 		block["origin"] = target
 		moved[target] = block
 	blocks = moved

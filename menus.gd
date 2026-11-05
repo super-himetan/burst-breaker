@@ -93,7 +93,9 @@ func buttons(screen: int) -> Array[Dictionary]:
 			list.append(_button("lang_ja", Rect2(70.0, 340.0, 280.0, 100.0), "日本語", "selected" if save.lang == "ja" else "normal"))
 			list.append(_button("lang_en", Rect2(370.0, 340.0, 280.0, 100.0), "English", "selected" if save.lang == "en" else "normal"))
 			list.append(_button("sound", Rect2(70.0, 490.0, 580.0, 100.0), "%s : %s" % [t("sound"), t("on" if save.sound else "off")]))
-			list.append(_button("vibration", Rect2(70.0, 610.0, 580.0, 100.0), "%s : %s" % [t("vibration"), t("on" if save.vibration else "off")]))
+			list.append(_button("music", Rect2(70.0, 610.0, 580.0, 100.0), "%s : %s" % [t("music"), t("on" if save.music else "off")]))
+			list.append(_button("vibration", Rect2(70.0, 730.0, 580.0, 100.0), "%s : %s" % [t("vibration"), t("on" if save.vibration else "off")]))
+			list.append(_button("reduce_fx", Rect2(70.0, 850.0, 580.0, 100.0), "%s : %s" % [t("reduce_fx"), t("on" if save.reduce_fx else "off")]))
 			list.append(_button("back", Rect2(160.0, 1090.0, 400.0, 96.0), t("back")))
 		Screen.LOADOUT:
 			var ball_ids := Balls.ids()

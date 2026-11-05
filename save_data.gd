@@ -14,6 +14,8 @@ var path := DEFAULT_PATH
 var lang := I18n.DEFAULT_LANG
 var sound := true
 var vibration := true
+var music := true
+var reduce_fx := false
 var tutorial_done := false
 
 var coins := 0
@@ -50,6 +52,8 @@ func load_file() -> void:
 	lang = saved_lang if I18n.LANGS.has(saved_lang) else I18n.DEFAULT_LANG
 	sound = bool(data.get("sound", sound))
 	vibration = bool(data.get("vibration", vibration))
+	music = bool(data.get("music", music))
+	reduce_fx = bool(data.get("reduce_fx", reduce_fx))
 	tutorial_done = bool(data.get("tutorial_done", tutorial_done))
 	coins = int(data.get("coins", coins))
 	coins_this_life = int(data.get("coins_this_life", coins_this_life))
@@ -118,6 +122,8 @@ func save_file() -> bool:
 		"lang": lang,
 		"sound": sound,
 		"vibration": vibration,
+		"music": music,
+		"reduce_fx": reduce_fx,
 		"tutorial_done": tutorial_done,
 		"coins": coins,
 		"coins_this_life": coins_this_life,
