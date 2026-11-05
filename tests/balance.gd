@@ -1,12 +1,13 @@
 extends SceneTree
 ## Plays long campaigns with a simple bot to expose pacing and balance problems.
 ## Run: godot --headless --path . -s tests/balance.gd -- campaign 120 1
-## Modes: campaign <runs> <seed> | perks <runs> <seed> | balls <runs> <seed>
+## Modes: campaign <runs> <seed> | perks <runs> <seed> | balls <runs> <seed> | bosses <runs> <seed>
 
 const GameSim := preload("res://sim/game_sim.gd")
 const SaveData := preload("res://save_data.gd")
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
+const Bosses := preload("res://data/bosses.gd")
 const Shop := preload("res://data/shop.gd")
 
 const DT := 1.0 / 60.0
@@ -33,6 +34,8 @@ func _init() -> void:
 			_perk_table(runs, seed_value)
 		"balls":
 			_ball_table(runs, seed_value)
+		"bosses":
+			_boss_table(runs, seed_value)
 	quit()
 
 
@@ -53,7 +56,12 @@ func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 	var seen := {}
 	var first_burst_stage := 0
 	var started := Time.get_ticks_msec()
+	var boss_turns := {}
+	var last_shots := 0
 	while Time.get_ticks_msec() - started < RUN_TIMEOUT_MSEC:
+		if sim.boss_block != null and sim.shots > last_shots:
+			boss_turns[sim.stage + 1] = int(boss_turns.get(sim.stage + 1, 0)) + 1
+		last_shots = sim.shots
 		match sim.state:
 			GameSim.State.AIM:
 				if sim.can_burst():
@@ -86,6 +94,7 @@ func _play(config: Dictionary, seed_value: int, given := "") -> Dictionary:
 		"seconds": sim.sim_time + sim.shots * AIM_SECONDS + picks * PICK_SECONDS,
 		"seen": seen,
 		"first_burst_stage": first_burst_stage,
+		"boss_turns": boss_turns,
 	}
 
 
@@ -243,6 +252,31 @@ func _perk_table(runs: int, seed_value: int) -> void:
 	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
 	for row in rows:
 		print("%3d%%  %-16s avg_damage=%d" % [row[0], row[1], row[2]])
+
+
+## Each boss against a fresh save and a mid-game save: of the runs that reach it, how many
+## beat it, and how many turns that fight took.
+func _boss_table(runs: int, seed_value: int) -> void:
+	var ids := Bosses.ids()
+	var saves := {"fresh": {"tier": 0, "stars": 0, "shop": {}, "unlocked_perks": null}, "mid": _fixed_config()}
+	for index in ids.size():
+		var id := ids[index]
+		if index % _shards != _shard:
+			continue
+		var boss_stage := 4 if int(Bosses.BOSSES[id]["pool"]) == 0 else 8
+		for save_name: String in saves:
+			var reached := 0
+			var passed := 0
+			var turns := 0
+			for i in runs:
+				var config: Dictionary = (saves[save_name] as Dictionary).duplicate()
+				config["boss_force"] = id
+				var r := _play(config, seed_value * 6101 + i)
+				if int(r["stage"]) >= boss_stage:
+					reached += 1
+					turns += int((r["boss_turns"] as Dictionary).get(boss_stage, 0))
+					passed += 1 if int(r["counters"].get("boss_" + id, 0)) > 0 else 0
+			print("%-9s stage %d %-5s reached %3d/%3d  beat %3d%%  boss_turns %.1f" % [id, boss_stage, save_name, reached, runs, 100 * passed / maxi(reached, 1), float(turns) / maxi(reached, 1)])
 
 
 func _ball_table(runs: int, seed_value: int) -> void:

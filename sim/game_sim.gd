@@ -5,6 +5,7 @@ const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
 const Shop := preload("res://data/shop.gd")
 const Tiers := preload("res://data/tiers.gd")
+const Bosses := preload("res://data/bosses.gd")
 
 enum State { AIM, SHOOT, UPGRADE, WON, LOST }
 
@@ -39,15 +40,27 @@ const STAGES := [
 	{"rows": 3, "waves": 1, "hp_min": 1, "hp_max": 3, "density": 0.65, "specials": {"bomb": 0.1}},
 	{"rows": 3, "waves": 2, "hp_min": 3, "hp_max": 8, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04}},
 	{"rows": 4, "waves": 2, "hp_min": 8, "hp_max": 16, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08}},
-	{"rows": 2, "waves": 0, "hp_min": 12, "hp_max": 26, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"kind": "guardian", "hp": 700, "summon": 2, "every": 3}},
+	{"rows": 2, "waves": 0, "hp_min": 12, "hp_max": 26, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"pool": 0, "hp": 700, "every": 3}},
 	{"rows": 5, "waves": 3, "hp_min": 28, "hp_max": 58, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
 	{"rows": 5, "waves": 3, "hp_min": 42, "hp_max": 90, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
 	{"rows": 6, "waves": 3, "hp_min": 62, "hp_max": 132, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
-	{"rows": 3, "waves": 0, "hp_min": 70, "hp_max": 140, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"kind": "overlord", "hp": 8500, "summon": 3, "every": 3}},
+	{"rows": 3, "waves": 0, "hp_min": 70, "hp_max": 140, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"pool": 1, "hp": 16000, "every": 1}},
 ]
 
 const BOSS_SIZE := Vector2i(3, 2)
 const BOSS_STAGE_EXTRA_PICKS := 1
+const SLIME_STEP := 0.25
+const SLIME_PIECES := 3
+const MOGU_HEAL_PER_BITE := 0.02
+const GUARDED_DAMAGE := 0.25
+const GUARD_RETURN_TURNS := 3
+const GUARD_HP := 2.5
+const LUMINA_HEAL := 0.025
+const LUMINA_ANGRY_HEAL := 0.035
+const DOKAN_THROWS := 2
+const ZERO_WALL_ROWS := 4
+## Boss tricks never place blocks closer to the danger line than this.
+const BOSS_REACH_MARGIN := 4
 
 
 class Ball:
@@ -114,10 +127,12 @@ var _stages_cleared := 0
 var _offered_evolutions := {}
 var _burst_shot := false
 var _burst_shot_gain := 0.0
+var _boss_met: Array = []
+var boss_force := ""
 
 
 ## config: ball_type, tier, shop ({id: level}), stars, unlocked_perks (null = all),
-## tutorial_offer, emit_events.
+## tutorial_offer, emit_events, boss_met (ids to meet last), boss_force (always this boss).
 func new_run(seed_value: int, config := {}) -> void:
 	_rng.seed = seed_value
 	state = State.AIM
@@ -130,6 +145,8 @@ func new_run(seed_value: int, config := {}) -> void:
 	unlocked_perks = config.get("unlocked_perks", null)
 	_tutorial_offer = bool(config.get("tutorial_offer", false))
 	emit_events = bool(config.get("emit_events", true))
+	_boss_met = config.get("boss_met", [])
+	boss_force = String(config.get("boss_force", ""))
 	_base_stats = _build_base_stats(config)
 	_coin_scale = Tiers.coin_scale(tier) * (1.0 + STAR_COINS * int(config.get("stars", 0)))
 	launch_x = FIELD_X + FIELD_W / 2.0
@@ -455,7 +472,7 @@ func _start_stage() -> void:
 	else:
 		for row in int(cfg["rows"]):
 			_spawn_row(row)
-	_emit({"type": "stage_start", "stage": stage, "boss": cfg.has("boss")})
+	_emit({"type": "stage_start", "stage": stage, "boss": cfg.has("boss"), "boss_id": boss_id()})
 
 
 func _block_hp(base: float) -> int:
@@ -478,19 +495,44 @@ func _new_block(hp: int, kind: String, origin: Vector2i, size := Vector2i.ONE) -
 	return block
 
 
+func boss_id() -> String:
+	return "" if boss_block == null else String((boss_block as Dictionary)["boss_id"])
+
+
+## Bosses the player has not met yet come first, so the whole cast shows up quickly.
+func _pick_boss(pool: int) -> String:
+	if boss_force != "":
+		return boss_force
+	var options := Bosses.in_pool(pool)
+	var fresh := options.filter(func(id: String) -> bool: return not _boss_met.has(id))
+	var from: Array = fresh if not fresh.is_empty() else options
+	return String(from[_rng.randi_range(0, from.size() - 1)])
+
+
 func _spawn_boss(cfg: Dictionary) -> void:
+	var id := _pick_boss(int(cfg["pool"]))
+	var data: Dictionary = Bosses.BOSSES[id]
 	var scale := 2.0 if Tiers.has_rule(tier, "boss_hp") else 1.0
-	var hp := _block_hp(float(cfg["hp"]) * scale)
+	var hp := _block_hp(float(cfg["hp"]) * float(data["hp"]) * scale)
 	var origin := Vector2i((COLS - BOSS_SIZE.x) / 2, 0)
 	var block := _new_block(hp, "boss", origin, BOSS_SIZE)
-	block["boss_kind"] = cfg["kind"]
-	block["summon"] = cfg["summon"]
+	block["boss_id"] = id
+	block["summon"] = data["summon"]
+	block["minion"] = data["minion"]
 	block["every"] = cfg["every"]
 	block["age"] = 0
+	block["angry"] = false
+	block["next_split"] = 1.0 - SLIME_STEP
+	block["dir"] = 1 if _rng.randf() < 0.5 else -1
+	block["guards"] = []
+	block["guard_wait"] = 0
+	block["aim_cols"] = []
 	boss_block = block
 	for y in BOSS_SIZE.y:
 		for x in BOSS_SIZE.x:
 			blocks[origin + Vector2i(x, y)] = block
+	if id == "gantetsu":
+		_spawn_guards(block)
 
 
 func _spawn_row(row: int) -> void:
@@ -793,6 +835,8 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		damage *= 0.5
 	if block["kind"] == "shield" and not is_burst:
 		damage = 1.0
+	if block["kind"] == "boss" and not is_burst and is_boss_guarded():
+		damage *= GUARDED_DAMAGE
 	var amount := maxi(int(ceil(damage)), 1)
 	var dealt: int = mini(amount, int(block["hp"]))
 	block["hp"] = int(block["hp"]) - amount
@@ -818,6 +862,8 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 	})
 	if int(block["hp"]) <= 0:
 		_kill_block(cell, block, flags)
+	elif block["kind"] == "boss":
+		_on_boss_hurt(block)
 
 
 func _charge_burst() -> void:
@@ -839,10 +885,11 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary) -> void:
 	if kind == "boss":
 		gained = 25.0 * (stage + 1) * (1.0 + stat("boss_coins"))
 		counters["bosses"] += 1
+		counters["boss_" + String(block["boss_id"])] = int(counters.get("boss_" + String(block["boss_id"]), 0)) + 1
 		boss_block = null
 	var coin_amount := _grant_coins(gained)
 	var center := block_rect(block).get_center()
-	_emit({"type": "kill", "pos": center, "coins": coin_amount, "kind": kind, "bomb": kind == "bomb"})
+	_emit({"type": "kill", "pos": center, "coins": coin_amount, "kind": kind, "bomb": kind == "bomb", "boss_id": block.get("boss_id", "")})
 	if kind == "extra_ball":
 		bonus_balls += 1
 		_emit({"type": "extra_ball", "pos": center})
@@ -1045,26 +1092,35 @@ func _descend() -> void:
 		return
 	var boss_moves := _boss_turn(true)
 	var moved := {}
+	var bites := 0
 	if boss_block != null:
 		var boss: Dictionary = boss_block
 		var origin: Vector2i = boss["origin"]
 		if boss_moves:
 			origin += Vector2i.DOWN
-			boss["origin"] = origin
+		if boss["boss_id"] == "mogu":
+			origin = _strafe(boss, origin)
+		boss["origin"] = origin
 		for y in BOSS_SIZE.y:
 			for x in BOSS_SIZE.x:
 				moved[origin + Vector2i(x, y)] = boss
+		# Bodyguards keep formation instead of drifting down with the rest.
+		for guard: Dictionary in _live_guards():
+			var post: Vector2i = origin + (guard["post"] as Vector2i)
+			guard["origin"] = post
+			moved[post] = guard
 	# Bottom rows first, so blocks stack up against the boss instead of overlapping it.
 	var cells := blocks.keys()
 	cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y > b.y)
 	for cell: Vector2i in cells:
 		var block: Dictionary = blocks[cell]
-		if block["kind"] == "boss":
+		if block["kind"] == "boss" or block.has("post"):
 			continue
 		var target: Vector2i = cell + Vector2i.DOWN
 		if moved.has(target):
 			target = cell
 		if moved.has(target):
+			bites += 1
 			continue
 		block["origin"] = target
 		moved[target] = block
@@ -1072,6 +1128,9 @@ func _descend() -> void:
 	if waves_left > 0:
 		waves_left -= 1
 		_spawn_row(0)
+	if boss_block != null and boss_id() == "mogu" and bites > 0:
+		_heal_boss(float(bites) * MOGU_HEAL_PER_BITE, "chomp")
+	_boss_trick()
 	_summon_if_due()
 	_emit({"type": "descend"})
 
@@ -1090,7 +1149,9 @@ func _summon_if_due() -> void:
 		return
 	var boss: Dictionary = boss_block
 	var count: int = boss["summon"]
-	if float(boss["hp"]) / float(boss["max_hp"]) < 0.5:
+	if count <= 0:
+		return
+	if boss["angry"]:
 		count += 1
 	var free: Array[int] = []
 	for col in COLS:
@@ -1098,9 +1159,173 @@ func _summon_if_due() -> void:
 			free.append(col)
 	for i in mini(count, free.size()):
 		var index := _rng.randi_range(0, free.size() - 1)
-		_place_block(Vector2i(free[index], 0))
+		var cell := Vector2i(free[index], 0)
+		if String(boss["minion"]) == "":
+			_place_block(cell)
+		else:
+			_put_block(cell, String(boss["minion"]), _minion_hp())
 		free.remove_at(index)
 	_emit({"type": "summon"})
+
+
+func _minion_hp() -> int:
+	var cfg: Dictionary = STAGES[stage]
+	return _block_hp(_rng.randf_range(float(cfg["hp_min"]), float(cfg["hp_max"])))
+
+
+func _put_block(cell: Vector2i, kind: String, hp: int) -> Variant:
+	if blocks.has(cell) or cell.x < 0 or cell.x >= COLS or cell.y < 0:
+		return null
+	var block := _new_block(hp, kind, cell)
+	blocks[cell] = block
+	return block
+
+
+func _boss_action(action: String, extra := {}) -> void:
+	var event := {"type": "boss_action", "action": action, "boss": boss_id(), "pos": block_rect(boss_block).get_center()}
+	event.merge(extra)
+	_emit(event)
+
+
+## Runs after every hit that leaves the boss alive.
+func _on_boss_hurt(boss: Dictionary) -> void:
+	var ratio := float(boss["hp"]) / float(boss["max_hp"])
+	if ratio < 0.5 and not boss["angry"]:
+		boss["angry"] = true
+		_emit({"type": "boss_angry", "boss": boss["boss_id"], "pos": block_rect(boss).get_center()})
+	if boss["boss_id"] == "purun":
+		while ratio < float(boss["next_split"]):
+			boss["next_split"] = float(boss["next_split"]) - SLIME_STEP
+			_split_slime(boss)
+
+
+## Purun: every quarter of its health flies off as new blocks around it.
+func _split_slime(boss: Dictionary) -> void:
+	var origin: Vector2i = boss["origin"]
+	var spots: Array[Vector2i] = []
+	for x in range(-1, BOSS_SIZE.x + 1):
+		spots.append(origin + Vector2i(x, BOSS_SIZE.y))
+	for y in BOSS_SIZE.y:
+		spots.append(origin + Vector2i(-1, y))
+		spots.append(origin + Vector2i(BOSS_SIZE.x, y))
+	var targets: Array[Vector2] = []
+	while targets.size() < SLIME_PIECES and not spots.is_empty():
+		var cell: Vector2i = spots.pop_at(_rng.randi_range(0, spots.size() - 1))
+		if cell.y >= death_row - BOSS_REACH_MARGIN:
+			continue
+		var piece: Variant = _put_block(cell, "normal", _minion_hp())
+		if piece != null:
+			(piece as Dictionary)["tint"] = "boss"
+			targets.append(cell_rect(cell).get_center())
+	_boss_action("split", {"targets": targets})
+
+
+## Mogu: wanders sideways every turn and eats whatever ends up inside it.
+func _strafe(boss: Dictionary, origin: Vector2i) -> Vector2i:
+	var next: int = origin.x + int(boss["dir"])
+	if next < 0 or next > COLS - BOSS_SIZE.x:
+		boss["dir"] = -int(boss["dir"])
+		next = origin.x + int(boss["dir"])
+	return Vector2i(next, origin.y)
+
+
+func _heal_boss(share: float, action: String) -> void:
+	var boss: Dictionary = boss_block
+	var amount := mini(int(ceil(float(boss["max_hp"]) * share)), int(boss["max_hp"]) - int(boss["hp"]))
+	boss["hp"] = int(boss["hp"]) + amount
+	if float(boss["hp"]) / float(boss["max_hp"]) >= 0.5:
+		boss["angry"] = false
+	_boss_action(action, {"amount": amount})
+
+
+func _boss_trick() -> void:
+	if boss_block == null:
+		return
+	var boss: Dictionary = boss_block
+	match boss["boss_id"]:
+		"gantetsu":
+			if _live_guards().is_empty():
+				boss["guard_wait"] = int(boss["guard_wait"]) + 1
+				if int(boss["guard_wait"]) >= GUARD_RETURN_TURNS:
+					boss["guard_wait"] = 0
+					_spawn_guards(boss)
+		"lumina":
+			_heal_boss(LUMINA_ANGRY_HEAL if boss["angry"] else LUMINA_HEAL, "heal")
+		"dokan":
+			_throw_bombs(boss)
+		"zero":
+			_laser_turn(boss)
+
+
+## Gantetsu: while either bodyguard stands, hits barely scratch it.
+func _spawn_guards(boss: Dictionary) -> void:
+	var origin: Vector2i = boss["origin"]
+	var guards_list: Array = []
+	var targets: Array[Vector2] = []
+	var cfg: Dictionary = STAGES[stage]
+	for post: Vector2i in [Vector2i(-1, 1), Vector2i(BOSS_SIZE.x, 1)]:
+		var placed: Variant = _put_block(origin + post, "armor", _block_hp(float(cfg["hp_max"]) * GUARD_HP))
+		if placed != null:
+			(placed as Dictionary)["post"] = post
+			guards_list.append(placed)
+			targets.append(cell_rect(origin + post).get_center())
+	boss["guards"] = guards_list
+	_boss_action("guards", {"targets": targets})
+
+
+func _live_guards() -> Array:
+	if boss_block == null:
+		return []
+	var alive: Array = []
+	for guard: Dictionary in (boss_block as Dictionary)["guards"]:
+		var cell: Vector2i = guard["origin"]
+		if blocks.has(cell) and blocks[cell]["id"] == guard["id"]:
+			alive.append(guard)
+	return alive
+
+
+func is_boss_guarded() -> bool:
+	return not _live_guards().is_empty()
+
+
+## Dokan: lobs bombs and rubble just ahead of the front line.
+func _throw_bombs(boss: Dictionary) -> void:
+	var origin: Vector2i = boss["origin"]
+	var top := origin.y + BOSS_SIZE.y
+	var bottom := mini(_lowest_row() + 1, death_row - BOSS_REACH_MARGIN)
+	var free: Array[Vector2i] = []
+	for y in range(top, bottom + 1):
+		for x in COLS:
+			if not blocks.has(Vector2i(x, y)):
+				free.append(Vector2i(x, y))
+	var count := DOKAN_THROWS + (1 if boss["angry"] else 0)
+	var targets: Array[Vector2] = []
+	for i in mini(count, free.size()):
+		var cell: Vector2i = free.pop_at(_rng.randi_range(0, free.size() - 1))
+		_put_block(cell, "bomb" if i == 0 else "normal", _minion_hp())
+		targets.append(cell_rect(cell).get_center())
+	if not targets.is_empty():
+		_boss_action("throw", {"targets": targets})
+
+
+## Zero: marks columns one turn, then fires down them and leaves armoured walls behind.
+func _laser_turn(boss: Dictionary) -> void:
+	var aimed: Array = boss["aim_cols"]
+	if aimed.is_empty():
+		var options: Array[int] = []
+		for col in COLS:
+			options.append(col)
+		for i in 2 if boss["angry"] else 1:
+			aimed.append(options.pop_at(_rng.randi_range(0, options.size() - 1)))
+		_boss_action("aim")
+		return
+	var origin: Vector2i = boss["origin"]
+	var top := origin.y + BOSS_SIZE.y
+	for col: int in aimed:
+		for y in range(top, mini(top + ZERO_WALL_ROWS, death_row - BOSS_REACH_MARGIN + 1)):
+			_put_block(Vector2i(col, y), "armor", _minion_hp())
+	_boss_action("laser", {"cols": aimed.duplicate()})
+	boss["aim_cols"] = []
 
 
 func _check_death() -> bool:

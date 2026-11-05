@@ -1,6 +1,7 @@
 extends SceneTree
 ## Run: godot --headless --path . -s tests/run_tests.gd
 
+const Bosses := preload("res://data/bosses.gd")
 const GameSim := preload("res://sim/game_sim.gd")
 const I18n := preload("res://i18n.gd")
 const SaveData := preload("res://save_data.gd")
@@ -35,6 +36,8 @@ func _init() -> void:
 	_test_reroll()
 	_test_special_blocks()
 	_test_boss()
+	_test_boss_cast()
+	_test_boss_tricks()
 	_test_guard_saves_the_run()
 	_test_ball_types()
 	_test_burst_gauge()
@@ -524,7 +527,7 @@ func _test_special_blocks() -> void:
 
 
 func _test_boss() -> void:
-	var sim := _sim(4)
+	var sim := _sim(4, {"boss_force": "purun"})
 	sim.stage = 3
 	sim._start_stage()
 	var boss: Dictionary = sim.boss_block
@@ -570,6 +573,174 @@ func _test_boss() -> void:
 	final_sim.state = GameSim.State.SHOOT
 	final_sim._end_shot()
 	_check(final_sim.state == GameSim.State.WON, "killing the last boss wins the run")
+
+
+func _boss_sim(id: String, stage := 3) -> GameSim:
+	var sim := _sim(4, {"boss_force": id})
+	sim.stage = stage
+	sim._start_stage()
+	return sim
+
+
+func _check_board_valid(sim: GameSim, label: String) -> void:
+	var valid := true
+	for cell: Vector2i in sim.blocks:
+		var b: Dictionary = sim.blocks[cell]
+		var o: Vector2i = b["origin"]
+		var s: Vector2i = b["size"]
+		valid = valid and cell.x >= o.x and cell.x < o.x + s.x and cell.y >= o.y and cell.y < o.y + s.y and cell.x >= 0 and cell.x < GameSim.COLS
+	_check(valid, label)
+
+
+func _test_boss_cast() -> void:
+	_check(Bosses.ids().size() == 6, "six bosses exist")
+	for pool in 2:
+		_check(Bosses.in_pool(pool).size() == 3, "boss pool %d offers a choice" % pool)
+		var met := {}
+		for seed_value in 60:
+			var sim := _sim(seed_value)
+			sim.stage = 3 if pool == 0 else 7
+			sim._start_stage()
+			met[sim.boss_id()] = true
+			_check(Bosses.in_pool(pool).has(sim.boss_id()), "stage picks from its own pool") if seed_value == 0 else null
+		_check(met.size() == 3, "pool %d: every boss can appear" % pool)
+	var pool_0 := Bosses.in_pool(0)
+	var only_fresh := _sim(9, {"boss_met": [pool_0[0], pool_0[1]]})
+	only_fresh.stage = 3
+	only_fresh._start_stage()
+	_check(only_fresh.boss_id() == pool_0[2], "an unmet boss comes first")
+	for id in Bosses.ids():
+		var sim := _boss_sim(id, 3 if int(Bosses.BOSSES[id]["pool"]) == 0 else 7)
+		for turn in 8:
+			sim._descend()
+			if sim.boss_block == null:
+				break
+		_check_board_valid(sim, "%s: board stays consistent over turns" % id)
+		sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
+		_check(sim.blocks.is_empty() and sim.counters["boss_" + id] == 1, "%s: its defeat is counted and clears the field" % id)
+
+
+func _test_boss_tricks() -> void:
+	# Purun: pieces fly off at each quarter of health lost.
+	var purun := _boss_sim("purun")
+	purun.blocks = purun.blocks.duplicate()
+	var boss: Dictionary = purun.boss_block
+	var count_before := purun.unique_blocks().size()
+	purun._damage_block(boss["origin"], float(boss["max_hp"]) * 0.2)
+	_check(purun.unique_blocks().size() == count_before, "purun: no split above 75%")
+	purun._damage_block(boss["origin"], float(boss["max_hp"]) * 0.1)
+	_check(purun.unique_blocks().size() > count_before, "purun: splits below 75%")
+	var after_split := purun.unique_blocks().size()
+	purun._damage_block(boss["origin"], 1.0)
+	_check(purun.unique_blocks().size() == after_split, "purun: one split per threshold")
+	_check_board_valid(purun, "purun: pieces land on real cells")
+
+	# Mogu: walks, stays in the field, and heals from what it eats.
+	var mogu := _boss_sim("mogu")
+	boss = mogu.boss_block
+	var columns := {}
+	for turn in 12:
+		mogu._descend()
+		columns[(boss["origin"] as Vector2i).x] = true
+	_check(columns.size() >= 3, "mogu: wanders sideways")
+	var in_field := true
+	for column: int in columns:
+		in_field = in_field and column >= 0 and column <= GameSim.COLS - GameSim.BOSS_SIZE.x
+	_check(in_field, "mogu: stays inside the field")
+	mogu = _boss_sim("mogu")
+	boss = mogu.boss_block
+	boss["hp"] = int(boss["max_hp"]) / 2
+	boss["dir"] = 1
+	var meal := (boss["origin"] as Vector2i) + Vector2i(GameSim.BOSS_SIZE.x, 0)
+	mogu.blocks[meal] = mogu._new_block(5, "normal", meal)
+	var hungry_hp := int(boss["hp"])
+	mogu._descend()
+	_check(int(boss["hp"]) > hungry_hp, "mogu: eating a block heals it")
+	_check(not mogu.blocks.has(meal) or mogu.blocks[meal]["kind"] == "boss", "mogu: the block is gone")
+
+	# Gantetsu: guarded until its men fall, and they come back.
+	var gantetsu := _boss_sim("gantetsu")
+	boss = gantetsu.boss_block
+	_check(gantetsu.is_boss_guarded(), "gantetsu: starts guarded")
+	var guard_hp := int(boss["hp"])
+	gantetsu._damage_block(boss["origin"], 100.0)
+	_check(guard_hp - int(boss["hp"]) == 25, "gantetsu: guards cut damage to a quarter")
+	guard_hp = int(boss["hp"])
+	gantetsu._damage_block(boss["origin"], 100.0, {"burst": true})
+	_check(guard_hp - int(boss["hp"]) == 100, "gantetsu: a burst ignores the guards")
+	gantetsu._descend()
+	var guards_after: Array = gantetsu._live_guards()
+	var kept_post := true
+	for guard: Dictionary in guards_after:
+		kept_post = kept_post and gantetsu.blocks[guard["origin"]]["id"] == guard["id"] and (guard["origin"] as Vector2i).y == (boss["origin"] as Vector2i).y + 1
+	_check(guards_after.size() == 2 and kept_post, "gantetsu: guards hold formation")
+	for guard: Dictionary in guards_after:
+		gantetsu._damage_block(guard["origin"], 1.0e9)
+	_check(not gantetsu.is_boss_guarded(), "gantetsu: unguarded when they fall")
+	guard_hp = int(boss["hp"])
+	gantetsu._damage_block(boss["origin"], 100.0)
+	_check(guard_hp - int(boss["hp"]) == 100, "gantetsu: full damage when unguarded")
+	for turn in GameSim.GUARD_RETURN_TURNS:
+		gantetsu._boss_trick()
+	_check(gantetsu.is_boss_guarded(), "gantetsu: guards return")
+
+	# Dokan: throws at the front line, one bomb per volley, never right at the danger line.
+	var dokan := _boss_sim("dokan", 7)
+	var bombs_before := 0
+	for block in dokan.unique_blocks():
+		bombs_before += 1 if block["kind"] == "bomb" else 0
+	var total_before := dokan.unique_blocks().size()
+	dokan._boss_trick()
+	var bombs_after := 0
+	for block in dokan.unique_blocks():
+		bombs_after += 1 if block["kind"] == "bomb" else 0
+	_check(dokan.unique_blocks().size() == total_before + GameSim.DOKAN_THROWS and bombs_after == bombs_before + 1, "dokan: throws a bomb and rubble")
+	for turn in 30:
+		dokan._boss_trick()
+	var deepest := -1
+	for block in dokan.unique_blocks():
+		if block["kind"] != "boss":
+			deepest = maxi(deepest, (block["origin"] as Vector2i).y)
+	_check(deepest <= dokan.death_row - GameSim.BOSS_REACH_MARGIN, "dokan: cannot throw straight into the danger zone")
+
+	# Lumina: heals every turn, faster when hurt, and never past full.
+	var lumina := _boss_sim("lumina", 7)
+	boss = lumina.boss_block
+	lumina._boss_trick()
+	_check(int(boss["hp"]) == int(boss["max_hp"]), "lumina: cannot overheal")
+	boss["hp"] = int(boss["max_hp"]) / 2 + 1
+	var heal_from := int(boss["hp"])
+	lumina._boss_trick()
+	_check(int(boss["hp"]) > heal_from, "lumina: heals on its turn")
+	lumina._damage_block(boss["origin"], float(boss["max_hp"]) * 0.2)
+	_check(bool(boss["angry"]), "lumina: enrages below half")
+	lumina._summon_if_due()
+	var regen_found := false
+	for block in lumina.unique_blocks():
+		regen_found = regen_found or block["kind"] == "regen"
+	_check(regen_found, "lumina: summons regen blocks")
+
+	# Zero: one turn of warning, then walls.
+	var zero := _boss_sim("zero", 7)
+	boss = zero.boss_block
+	zero._boss_trick()
+	var aimed: Array = boss["aim_cols"]
+	_check(aimed.size() == 1, "zero: marks a column first")
+	var column: int = aimed[0]
+	for cell: Vector2i in zero.blocks.keys():
+		if cell.x == column and zero.blocks[cell]["kind"] != "boss":
+			zero.blocks.erase(cell)
+	zero._boss_trick()
+	var walls := 0
+	for cell: Vector2i in zero.blocks:
+		if cell.x == column and zero.blocks[cell]["kind"] == "armor":
+			walls += 1
+	_check(walls == GameSim.ZERO_WALL_ROWS or column >= 2 and column <= 4, "zero: leaves a wall down the marked column")
+	_check((boss["aim_cols"] as Array).is_empty(), "zero: re-aims after firing")
+	boss["hp"] = 1
+	boss["angry"] = true
+	zero._boss_trick()
+	_check((boss["aim_cols"] as Array).size() == 2, "zero: marks two columns when hurt")
 
 
 func _test_guard_saves_the_run() -> void:
@@ -808,6 +979,9 @@ func _test_text_coverage() -> void:
 		needed.append("ach_" + stat)
 	for id in Balls.ids():
 		needed.append("burst_" + id)
+	for id in Bosses.ids():
+		for part in ["name", "title", "desc", "intro", "trick", "angry", "defeat"]:
+			needed.append("boss_%s_%s" % [id, part])
 	for kind in ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]:
 		needed.append("block_" + kind)
 		needed.append("block_%s_desc" % kind)

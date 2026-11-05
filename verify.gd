@@ -1,6 +1,7 @@
 extends RefCounted
 ## Scripted end-to-end check: real input events, real rendering, saved screenshots.
 
+const Bosses := preload("res://data/bosses.gd")
 const Menus := preload("res://menus.gd")
 const GameSim := preload("res://sim/game_sim.gd")
 const SaveData := preload("res://save_data.gd")
@@ -124,6 +125,7 @@ func _verify_play() -> void:
 					await _shot("07_chaos_ja")
 				await _wait(0.03)
 			GameSim.State.UPGRADE:
+				await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
 				await _wait(0.45)
 				if not saved.has("upgrade"):
 					saved["upgrade"] = true
@@ -173,7 +175,12 @@ func _verify_specials() -> void:
 	await _tap_button("go")
 	var sim: GameSim = host.sim
 	sim.stage = 3
+	sim.boss_force = "purun"
 	sim._start_stage()
+	await _wait_until(func() -> bool: return host.boss_intro >= 0.0, 2000)
+	_check("boss_intro_plays", host.boss_intro >= 0.0)
+	_check("no_buttons_during_boss_intro", host.current_buttons().is_empty())
+	await _wait_until(func() -> bool: return host.boss_intro < 0.0, 8000)
 	var kinds: Array[String] = ["bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball"]
 	for i in kinds.size():
 		var cell := Vector2i(i, 5)
@@ -186,6 +193,8 @@ func _verify_specials() -> void:
 	await host.get_tree().process_frame
 	await _shot("12_boss_killed_ja")
 	_check("boss_kill_wipes_field", sim.blocks.is_empty())
+	await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
+	await _verify_boss_cast(sim)
 	await _tap_button("pause")
 	if host.paused:
 		await _tap_button("to_title")
@@ -193,6 +202,41 @@ func _verify_specials() -> void:
 		host.show_title_for_verify()
 	await _wait(0.2)
 	_check("back_on_title", host.screen == Menus.Screen.TITLE)
+
+
+## Every character gets its entrance, its field look, an angry face and a trick on screen.
+func _verify_boss_cast(sim: GameSim) -> void:
+	for id in Bosses.ids():
+		sim.state = GameSim.State.AIM
+		sim.stage = 3 if int(Bosses.BOSSES[id]["pool"]) == 0 else 7
+		sim.boss_force = id
+		sim._start_stage()
+		await _wait_until(func() -> bool: return host.boss_intro >= 1.1, 4000)
+		await _shot("40_boss_intro_%s" % id)
+		_check("%s_met_is_saved" % id, host.save.bosses_met.has(id))
+		await _touch_skip()
+		_check("%s_intro_can_be_skipped" % id, host.boss_intro < 0.0)
+		await _wait(0.3)
+		for turn in 3:
+			sim._descend()
+		await _wait(0.1)
+		await _shot("41_boss_field_%s" % id)
+		var boss: Dictionary = sim.boss_block
+		sim._damage_block(boss["origin"], float(boss["hp"]) * 0.6)
+		await _wait(0.5)
+		await _shot("42_boss_angry_%s" % id)
+		sim._damage_block((sim.boss_block as Dictionary)["origin"], 1.0e9)
+		await _wait(0.2)
+		await _shot("43_boss_down_%s" % id)
+		await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
+	sim.boss_force = ""
+
+
+func _touch_skip() -> void:
+	_touch(Vector2(360.0, 650.0), true)
+	await _wait(0.05)
+	_touch(Vector2(360.0, 650.0), false)
+	await _wait(0.05)
 
 
 func _verify_burst(sim: GameSim) -> void:
@@ -270,6 +314,8 @@ func _verify_meta_screens() -> void:
 	await _shot("16_codex_balls_ja")
 	await _tap_button("tab_blocks")
 	await _shot("17_codex_blocks_ja")
+	await _tap_button("tab_bosses")
+	await _shot("17b_codex_bosses_ja")
 	await _tap_button("back")
 
 	await _tap_button("prestige")

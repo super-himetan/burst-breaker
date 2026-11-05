@@ -6,6 +6,8 @@ const I18n := preload("res://i18n.gd")
 const UI := preload("res://ui_theme.gd")
 const Achievements := preload("res://data/achievements.gd")
 const Balls := preload("res://data/balls.gd")
+const Bosses := preload("res://data/bosses.gd")
+const BossArt := preload("res://boss_art.gd")
 const Perks := preload("res://data/perks.gd")
 const Shop := preload("res://data/shop.gd")
 const Tiers := preload("res://data/tiers.gd")
@@ -22,7 +24,8 @@ const SHOP_ROW_H := 118.0
 const ACHIEVEMENT_ROW_H := 98.0
 const CODEX_ROW_H := 110.0
 const BLOCK_KINDS: Array[String] = ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]
-const CODEX_TABS: Array[String] = ["perks", "balls", "blocks"]
+const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses"]
+const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
 
 var host: Node2D
 var save: RefCounted
@@ -109,7 +112,7 @@ func buttons(screen: int) -> Array[Dictionary]:
 		Screen.CODEX:
 			for i in CODEX_TABS.size():
 				var tab := CODEX_TABS[i]
-				var rect := Rect2(50.0 + i * 212.0, 122.0, 196.0, 70.0)
+				var rect := Rect2(40.0 + i * 162.0, 122.0, 152.0, 70.0)
 				list.append(_button("tab_" + tab, rect, t("codex_" + tab), "selected" if codex_tab == tab else "normal"))
 			list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
 		Screen.PRESTIGE:
@@ -409,6 +412,8 @@ func _codex_ids() -> Array[String]:
 			return Balls.ids()
 		"blocks":
 			return BLOCK_KINDS
+		"bosses":
+			return Bosses.ids()
 	return Perks.ids()
 
 
@@ -424,6 +429,8 @@ func _draw_codex() -> void:
 				_draw_codex_ball(ids[i], y)
 			"blocks":
 				_draw_codex_block(ids[i], y)
+			"bosses":
+				_draw_codex_boss(ids[i], y)
 			_:
 				_draw_codex_perk(ids[i], y)
 
@@ -478,6 +485,24 @@ func _draw_codex_block(kind: String, y: float) -> void:
 	host.text_left(Vector2(176.0, y + 36.0), t("block_" + kind), 28, UI.TEXT)
 	var line := t("block_%s_desc" % kind)
 	host.text_left(Vector2(176.0, y + 76.0), line, host.fit_size(line, 23, 480.0), UI.MUTED, host.font_body)
+
+
+func _draw_codex_boss(id: String, y: float) -> void:
+	var portrait := Rect2(52.0, y + 16.0, 158.0, 78.0)
+	if not save.bosses_met.has(id):
+		host.panel(portrait, BOSS_SILHOUETTE, 18.0)
+		host.text_center(portrait.get_center(), "?", 40, Color(UI.MUTED, 0.6))
+		host.text_left(Vector2(228.0, y + 36.0), t("codex_unknown"), 28, Color(UI.MUTED, 0.7))
+		var stage_hint := t("boss_hint_%d" % int(Bosses.BOSSES[id]["pool"]))
+		host.text_left(Vector2(228.0, y + 76.0), stage_hint, host.fit_size(stage_hint, 22, 430.0), Color(UI.MUTED, 0.8), host.font_body)
+		return
+	BossArt.draw(host.canvas, id, portrait, "idle", host.time)
+	var name_text := t("boss_%s_name" % id)
+	host.text_left(Vector2(228.0, y + 30.0), name_text, host.fit_size(name_text, 28, 290.0), Bosses.color(id).lightened(0.35))
+	var kills := t("boss_defeated") % save.stat_value("boss_" + id)
+	host.text_right(Vector2(656.0, y + 30.0), kills, 19, UI.MUTED, host.font_label)
+	var desc := t("boss_%s_desc" % id)
+	host.text_left(Vector2(228.0, y + 74.0), desc, host.fit_size(desc, 22, 430.0), UI.TEXT, host.font_body)
 
 
 func _draw_prestige() -> void:

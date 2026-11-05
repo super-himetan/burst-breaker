@@ -9,6 +9,8 @@ const Menus := preload("res://menus.gd")
 const Verify := preload("res://verify.gd")
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
+const Bosses := preload("res://data/bosses.gd")
+const BossArt := preload("res://boss_art.gd")
 const Achievements := preload("res://data/achievements.gd")
 const UI := preload("res://ui_theme.gd")
 const BackgroundShader := preload("res://shaders/background.gdshader")
@@ -24,6 +26,12 @@ const FONT_JAPANESE := ["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans
 const SAMPLE_RATE := 22050
 const BURST_WINDUP := 1.15
 const BURST_AFTERGLOW := 1.1
+const BOSS_INTRO := 2.7
+const BOSS_INTRO_SKIP_AFTER := 0.3
+const BOSS_DOWN_HOLD := 1.7
+const SPEECH_SECONDS := 2.6
+const SPEECH_COOLDOWN := 7.0
+const BOSS_HEAL_COLOR := Color("7dffb0")
 
 var sim: GameSim
 var save: SaveData
@@ -73,6 +81,18 @@ var burst_windup := -1.0
 var burst_after := 0.0
 var burst_origin := Vector2.ZERO
 var burst_was_ready := false
+var boss_intro := -1.0
+var boss_intro_id := ""
+var boss_intro_slammed := false
+var boss_down := 0.0
+var boss_down_id := ""
+var boss_down_pos := Vector2.ZERO
+var boss_rage_said := false
+var speech_text := ""
+var speech_time := 0.0
+var speech_cooldown := 0.0
+var speech_anchor := Vector2.ZERO
+var beams: Array[Dictionary] = []
 
 var font: Font
 var font_body: Font
@@ -275,6 +295,10 @@ func _start_run() -> void:
 	burst_windup = -1.0
 	burst_after = 0.0
 	burst_was_ready = false
+	boss_intro = -1.0
+	boss_down = 0.0
+	speech_time = 0.0
+	beams.clear()
 	_set_screen(Menus.Screen.GAME)
 
 
@@ -374,6 +398,13 @@ func _process_game(delta: float) -> void:
 		screen_age = 0.0
 	if not is_run_over():
 		run_seconds += delta
+	if boss_intro >= 0.0:
+		_process_boss_intro(delta)
+		return
+	if boss_down > 0.0:
+		boss_down = maxf(boss_down - delta, 0.0)
+		# The screen after the fight should open fresh, not count as already waited for.
+		screen_age = 0.0
 	if burst_windup >= 0.0:
 		_process_burst_windup(delta)
 		return
@@ -425,6 +456,77 @@ func _process_burst_windup(delta: float) -> void:
 	_consume_events()
 
 
+func _begin_boss_intro(id: String) -> void:
+	boss_intro = 0.0
+	boss_intro_id = id
+	boss_intro_slammed = false
+	boss_rage_said = false
+	speech_time = 0.0
+	speech_cooldown = SPEECH_COOLDOWN
+	aiming = false
+	_play("charge", 0.6)
+	save.mark_boss_met(id)
+	save.save_file()
+
+
+## The boss drops in, the screen jumps, and it gets to say its piece.
+func _process_boss_intro(delta: float) -> void:
+	boss_intro += delta
+	if not boss_intro_slammed and boss_intro >= 0.42:
+		boss_intro_slammed = true
+		trauma = 1.0
+		impact = 0.03
+		screen_flash = 0.7
+		_play("boom", 0.55)
+		_spawn_particles(Vector2(BASE_W / 2.0, 560.0), Bosses.color(boss_intro_id), 60, 900.0)
+		if save.vibration and OS.has_feature("mobile"):
+			Input.vibrate_handheld(80)
+	if boss_intro >= BOSS_INTRO:
+		boss_intro = -1.0
+
+
+func _say(key: String, always := false) -> void:
+	if not always and speech_cooldown > 0.0:
+		return
+	speech_text = t(key)
+	speech_time = SPEECH_SECONDS
+	speech_cooldown = SPEECH_COOLDOWN
+
+
+func _on_boss_action(e: Dictionary) -> void:
+	var action: String = e["action"]
+	var color := Bosses.color(e["boss"])
+	match action:
+		"split":
+			_play("pop", 0.7)
+			trauma = minf(trauma + 0.3, 1.0)
+		"chomp", "heal":
+			var amount: int = e["amount"]
+			if amount > 0:
+				numbers.append({"pos": e["pos"] + Vector2(0.0, -30.0), "text": "+" + I18n.format_number(amount), "t": 0.0, "big": true, "dot": true})
+				_spawn_particles(e["pos"], BOSS_HEAL_COLOR, 18, 260.0)
+				_play("coin", 0.7)
+		"throw":
+			_play("fire", 0.6)
+		"guards":
+			_play("pick", 0.7)
+		"aim":
+			_play("charge", 1.6)
+		"laser":
+			_play("blast", 1.3)
+			trauma = minf(trauma + 0.6, 1.0)
+			impact = maxf(impact, 0.012)
+			for col: int in e["cols"]:
+				beams.append({"col": col, "t": 0.0})
+	for target: Vector2 in e.get("targets", []):
+		_spawn_particles(target, color, 14, 320.0)
+		rings.append({"pos": target, "t": 0.0, "size": 70.0})
+		if bolts.size() < 24 and action == "throw":
+			bolts.append({"to": target, "x": (e["pos"] as Vector2).x, "t": 0.0})
+	if action != "aim" or randf() < 0.5:
+		_say("boss_%s_trick" % String(e["boss"]))
+
+
 func _note_offered_perks() -> void:
 	if sim.choices == seen_choices:
 		return
@@ -468,7 +570,10 @@ func _on_press(p: Vector2) -> void:
 		list_press = p
 		list_last = p
 		return
-	if screen != Menus.Screen.GAME or paused or burst_windup >= 0.0:
+	if screen == Menus.Screen.GAME and not paused and boss_intro >= BOSS_INTRO_SKIP_AFTER:
+		boss_intro = -1.0
+		return
+	if screen != Menus.Screen.GAME or paused or burst_windup >= 0.0 or boss_intro >= 0.0 or boss_down > 0.0:
 		return
 	match sim.state:
 		GameSim.State.AIM:
@@ -572,7 +677,7 @@ func current_buttons() -> Array[Dictionary]:
 	if screen != Menus.Screen.GAME:
 		return menus.buttons(screen)
 	var list: Array[Dictionary] = []
-	if burst_windup >= 0.0:
+	if burst_windup >= 0.0 or (boss_intro >= 0.0 and not paused) or (boss_down > 0.0 and not paused):
 		return list
 	if paused:
 		list.append(_button("resume", Rect2(110.0, 430.0, 500.0, 120.0), t("resume"), "primary"))
@@ -640,11 +745,18 @@ func _consume_events() -> void:
 					_show_banner(I18n.format_number(e["damage"]), 1.2)
 			"stage_start":
 				if e["boss"]:
-					_show_banner(t("boss_banner"), 1.3)
-					trauma = 0.8
-					_play("lose", 0.8)
+					_begin_boss_intro(e["boss_id"])
 				else:
 					_show_banner(t("stage_banner") % (int(e["stage"]) + 1), 1.0)
+			"boss_action":
+				_on_boss_action(e)
+			"boss_angry":
+				if not boss_rage_said:
+					boss_rage_said = true
+					_say("boss_%s_angry" % String(e["boss"]), true)
+					trauma = minf(trauma + 0.5, 1.0)
+					_spawn_particles(e["pos"], UI.DANGER, 30, 500.0)
+					_play("charge", 1.3)
 			"stage_clear":
 				_play("win", 1.0)
 				trauma = minf(trauma + 0.5, 1.0)
@@ -711,6 +823,11 @@ func _on_kill(e: Dictionary) -> void:
 		screen_flash = 1.0
 		impact = 0.03
 		_play("boom", 0.6)
+		boss_down = BOSS_DOWN_HOLD
+		boss_down_id = e["boss_id"]
+		boss_down_pos = e["pos"]
+		_say("boss_%s_defeat" % boss_down_id, true)
+		_show_banner(t("boss_down") % t("boss_%s_name" % boss_down_id), BOSS_DOWN_HOLD)
 	if time - last_pop_sound > 0.025:
 		last_pop_sound = time
 		_play("pop", randf_range(0.9, 1.2))
@@ -771,6 +888,11 @@ func _update_fx(delta: float) -> void:
 	combo_pop = maxf(combo_pop - delta * 8.0, 0.0)
 	coin_pop = maxf(coin_pop - delta * 7.0, 0.0)
 	screen_flash = maxf(screen_flash - delta * 2.5, 0.0)
+	speech_time = maxf(speech_time - delta, 0.0)
+	speech_cooldown = maxf(speech_cooldown - delta, 0.0)
+	for beam in beams:
+		beam["t"] = float(beam["t"]) + delta
+	beams = beams.filter(func(beam: Dictionary) -> bool: return float(beam["t"]) < 0.45)
 	for id in flash.keys():
 		flash[id] = float(flash[id]) - delta * 9.0
 		if float(flash[id]) <= 0.0:
@@ -839,11 +961,44 @@ func _draw() -> void:
 	var field := Rect2(GameSim.FIELD_X - 8.0, GameSim.FIELD_Y - 8.0, GameSim.FIELD_W + 16.0, GameSim.LAUNCH_Y - GameSim.FIELD_Y + 42.0)
 	panel(field, Color(0.04, 0.03, 0.1, 0.42), 26.0, UI.LINE, 2)
 	_draw_danger_line()
+	_draw_laser_warning()
 	_draw_blocks()
+	_draw_boss_down()
 	_draw_balls()
 	_draw_launcher()
 	if (aiming or hovering) and sim.state == GameSim.State.AIM and not paused:
 		_draw_aim()
+
+
+## Zero's marked columns glow in warning stripes until it fires.
+func _draw_laser_warning() -> void:
+	if sim.boss_id() != "zero" or sim.state != GameSim.State.AIM:
+		return
+	var boss: Dictionary = sim.boss_block
+	var rect := sim.block_rect(boss)
+	var pulse := 0.5 + sin(time * 9.0) * 0.5
+	for col: int in boss["aim_cols"]:
+		var x := GameSim.FIELD_X + col * GameSim.CELL_W
+		var top := rect.end.y
+		var bottom := GameSim.FIELD_Y + sim.death_row * GameSim.CELL_H
+		draw_rect(Rect2(x + 4.0, top, GameSim.CELL_W - 8.0, bottom - top), Color(UI.DANGER, 0.08 + pulse * 0.1))
+		var y := top + fmod(time * 90.0, 34.0)
+		while y < bottom:
+			draw_line(Vector2(x + 8.0, y), Vector2(x + GameSim.CELL_W - 8.0, y + 10.0), Color(UI.DANGER, 0.35), 3.0)
+			y += 34.0
+
+
+## The beaten boss hangs in the air for a moment, then falls away spinning.
+func _draw_boss_down() -> void:
+	if boss_down <= 0.0 or boss_down_id == "":
+		return
+	var k := 1.0 - boss_down / BOSS_DOWN_HOLD
+	var fall := maxf(k - 0.2, 0.0)
+	var pos := boss_down_pos + Vector2(0.0, fall * fall * 900.0)
+	var size := Vector2(264.0, 114.0)
+	draw_set_transform(pos, fall * 2.2, Vector2.ONE * (1.0 + k * 0.25))
+	BossArt.draw(self, boss_down_id, Rect2(-size / 2.0, size), "dead", time)
+	draw_set_transform(Vector2.ZERO)
 
 
 func _draw_danger_line() -> void:
@@ -862,6 +1017,12 @@ func _draw_glow() -> void:
 	if screen != Menus.Screen.GAME or paused:
 		return
 	_draw_burst_light()
+	for beam in beams:
+		var k := float(beam["t"]) / 0.45
+		var x := GameSim.FIELD_X + (float(beam["col"]) + 0.5) * GameSim.CELL_W
+		var width := GameSim.CELL_W * (1.0 - k * 0.7)
+		glow_layer.draw_rect(Rect2(x - width / 2.0, GameSim.FIELD_Y, width, GameSim.LAUNCH_Y - GameSim.FIELD_Y), Color(1.0, 0.25, 0.35, (1.0 - k) * 0.8))
+		glow_layer.draw_rect(Rect2(x - width / 6.0, GameSim.FIELD_Y, width / 3.0, GameSim.LAUNCH_Y - GameSim.FIELD_Y), Color(1.0, 1.0, 1.0, 1.0 - k))
 	var ball_color := _ball_color()
 	var radius := sim.ball_radius
 	for ball in sim.balls:
@@ -874,7 +1035,7 @@ func _draw_glow() -> void:
 			var pulse := 0.5 + sin(time * 4.0 + float(block["id"])) * 0.5
 			_glow_sprite(sim.block_rect(block).get_center(), 100.0, Color(UI.BLOCKS[block["kind"]], 0.1 + pulse * 0.1))
 		elif block["kind"] == "boss":
-			_glow_sprite(sim.block_rect(block).get_center(), 420.0, Color(UI.ACCENT, 0.3 + sin(time * 3.0) * 0.08))
+			_glow_sprite(sim.block_rect(block).get_center(), 420.0, Color(Bosses.color(block["boss_id"]), 0.3 + sin(time * 3.0) * 0.08))
 	for r in rings:
 		if float(r["t"]) < 0.0:
 			continue
@@ -1001,14 +1162,16 @@ func _draw_game_ui() -> void:
 	_draw_hud()
 	if screen_flash > 0.0:
 		fill_screen(Color(1.0, 0.96, 0.9, screen_flash * 0.32))
-	match sim.state:
-		GameSim.State.UPGRADE:
-			_draw_upgrade_screen()
-		GameSim.State.WON:
-			_draw_end_screen(t("you_win"), UI.GOLD)
-		GameSim.State.LOST:
-			_draw_end_screen(t("game_over"), UI.ACCENT)
-	if banner_time > 0.0 and sim.state != GameSim.State.UPGRADE and not paused:
+	if boss_down <= 0.0:
+		match sim.state:
+			GameSim.State.UPGRADE:
+				_draw_upgrade_screen()
+			GameSim.State.WON:
+				_draw_end_screen(t("you_win"), UI.GOLD)
+			GameSim.State.LOST:
+				_draw_end_screen(t("game_over"), UI.ACCENT)
+	_draw_boss_speech()
+	if banner_time > 0.0 and (sim.state != GameSim.State.UPGRADE or boss_down > 0.0) and not paused:
 		var pop := 1.0 + clampf(banner_time - 0.75, 0.0, 0.25) * 1.6
 		var alpha := minf(banner_time * 3.0, 1.0)
 		soft_glow(Vector2(BASE_W / 2.0, 610.0), Vector2(900.0, 340.0), Color(UI.ACCENT, 0.3 * alpha))
@@ -1016,9 +1179,78 @@ func _draw_game_ui() -> void:
 		text_shadowed(Vector2(BASE_W / 2.0, 610.0), banner_text, size, Color(1.0, 1.0, 1.0, alpha))
 	if burst_windup >= 0.0:
 		_draw_burst_cut_in()
+	if boss_intro >= 0.0:
+		_draw_boss_intro()
 	if paused:
 		fill_screen(Color(UI.INK, 0.82))
 		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
+
+
+## A comic-style bubble under the boss, kept on screen wherever the boss has moved to.
+func _draw_boss_speech() -> void:
+	if speech_time <= 0.0 or paused or boss_intro >= 0.0:
+		return
+	if sim.boss_block != null:
+		speech_anchor = sim.block_rect(sim.boss_block).get_center() + Vector2(0.0, 62.0)
+	elif boss_down > 0.0:
+		speech_anchor = boss_down_pos + Vector2(0.0, 62.0)
+	else:
+		return
+	var alpha := minf(speech_time * 5.0, 1.0)
+	var pop := 1.0 + clampf(speech_time - (SPEECH_SECONDS - 0.12), 0.0, 0.12) * 1.2
+	var size := fit_size(speech_text, 26, 560.0)
+	var width: float = font_body.get_string_size(speech_text, HORIZONTAL_ALIGNMENT_LEFT, -1, size).x + 44.0
+	var box := Rect2(clampf(speech_anchor.x - width / 2.0, 20.0, BASE_W - width - 20.0), speech_anchor.y + 18.0, width, 58.0).grow(pop * 2.0 - 2.0)
+	var white := Color(1.0, 1.0, 1.0, alpha)
+	canvas.draw_colored_polygon(PackedVector2Array([speech_anchor + Vector2(-13.0, 22.0), speech_anchor + Vector2(0.0, 2.0), speech_anchor + Vector2(13.0, 22.0)]), white)
+	panel(box, white, 22.0)
+	text_center(box.get_center(), speech_text, size, Color(UI.INK, alpha), font_body)
+
+
+## Fighting-game entrance: bars close, the boss drops in, then its name and first words.
+func _draw_boss_intro() -> void:
+	var view := get_viewport_rect().size
+	var id := boss_intro_id
+	var color := Bosses.color(id)
+	var enter := 1.0 - pow(1.0 - clampf(boss_intro / 0.28, 0.0, 1.0), 3.0)
+	var leave := clampf((BOSS_INTRO - boss_intro) / 0.22, 0.0, 1.0)
+	var alpha := enter * leave
+	fill_screen(Color(UI.INK, alpha * 0.82))
+	var bar := alpha * 150.0
+	canvas.draw_rect(Rect2(-80.0, -y_offset - 80.0, view.x + 160.0, bar + 80.0), Color.BLACK)
+	canvas.draw_rect(Rect2(-80.0, BASE_H + y_offset - bar, view.x + 160.0, bar + 80.0), Color.BLACK)
+	var warning := t("boss_banner")
+	var scroll := fmod(time * 120.0, 260.0)
+	for edge_y: float in [bar - 44.0, BASE_H - bar + 12.0]:
+		for i in range(-1, 4):
+			text_left(Vector2(i * 260.0 + scroll, edge_y + 16.0), warning, 24, Color(UI.DANGER, alpha * 0.9), font_label)
+	soft_glow(Vector2(BASE_W / 2.0, 500.0), Vector2(1100.0, 760.0), Color(color, alpha * 0.55))
+	# A falling drop with one small bounce, so the landing has weight.
+	var fall := clampf(boss_intro / 0.42, 0.0, 1.0)
+	var drop := (1.0 - fall * fall) * -760.0
+	var after := maxf(boss_intro - 0.42, 0.0)
+	drop -= absf(sin(after * 9.0)) * exp(-after * 7.0) * 46.0
+	var size := Vector2(528.0, 228.0)
+	var rect := Rect2(Vector2((BASE_W - size.x) / 2.0, 390.0 + drop), size)
+	var mood := "hurt" if after > 0.0 and after < 0.12 else "idle"
+	BossArt.draw(canvas, id, rect, mood, time)
+	var reveal := clampf((boss_intro - 0.55) / 0.16, 0.0, 1.0) * leave
+	if reveal <= 0.0:
+		return
+	var slide := (1.0 - reveal) * 120.0
+	var title := t("boss_%s_title" % id)
+	text_center(Vector2(BASE_W / 2.0 - slide, 690.0), title, fit_size(title, 28, 640.0), Color(color.lightened(0.35), reveal), font_label)
+	var name_text := t("boss_%s_name" % id)
+	text_shadowed(Vector2(BASE_W / 2.0 + slide, 760.0), name_text, fit_size(name_text, 96, 640.0), Color(1.0, 1.0, 1.0, reveal))
+	var talk := clampf((boss_intro - 0.85) / 0.14, 0.0, 1.0) * leave
+	if talk <= 0.0:
+		return
+	var line := t("boss_%s_intro" % id)
+	var line_size := fit_size(line, 30, 580.0)
+	var width: float = font_body.get_string_size(line, HORIZONTAL_ALIGNMENT_LEFT, -1, line_size).x + 56.0
+	var box := Rect2((BASE_W - width) / 2.0, 846.0, width, 74.0)
+	panel(box, Color(1.0, 1.0, 1.0, talk), 28.0)
+	text_center(box.get_center(), line, line_size, Color(UI.INK, talk), font_body)
 
 
 ## Cinema bars close in and the move's name slams across the screen.
@@ -1058,6 +1290,8 @@ func _draw_blocks() -> void:
 		# A struck block swells for a moment, so every hit has weight.
 		var drawn := rect.grow(hit * 3.0)
 		_draw_block_body(kind, drawn, _block_color(block))
+		if block.has("post"):
+			panel(drawn, Color.TRANSPARENT, 14.0, Color("8be9fd"), 3)
 		if hit > 0.0:
 			panel(drawn, Color(1.0, 1.0, 1.0, hit * 0.85), 14.0)
 		if int(block["poison"]) > 0:
@@ -1097,41 +1331,42 @@ func _draw_block_body(kind: String, rect: Rect2, color: Color) -> void:
 
 func draw_block_icon(kind: String, rect: Rect2) -> void:
 	if kind == "boss":
-		panel(rect, UI.BLOCKS["boss"], 14.0)
-		_draw_boss_face(rect)
+		BossArt.draw(canvas, "purun", rect, "idle", time)
 		return
 	_draw_block_body(kind, rect, UI.BLOCKS.get(kind, UI.RAMP[1]))
 
 
 func _draw_boss(block: Dictionary, rect: Rect2) -> void:
+	var id: String = block["boss_id"]
+	var color := Bosses.color(id)
 	var ratio := clampf(float(block["hp"]) / float(block["max_hp"]), 0.0, 1.0)
-	var color: Color = UI.BLOCKS["boss"]
-	if ratio < 0.5:
-		color = color.lerp(Color("ff6b35"), 0.45 + sin(time * 9.0) * 0.3)
-	panel(rect, color, 22.0, Color(1.0, 1.0, 1.0, 0.25), 3)
-	panel(Rect2(rect.position + Vector2(8.0, 6.0), Vector2(rect.size.x - 16.0, rect.size.y * 0.3)), Color(1.0, 1.0, 1.0, 0.1), 14.0)
-	_draw_boss_face(rect)
 	var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
+	var angry: bool = block["angry"]
+	var plate := color.darkened(0.72)
+	if angry:
+		plate = plate.lerp(UI.DANGER.darkened(0.45), 0.5 + sin(time * 9.0) * 0.3)
+	panel(rect, plate, 22.0, Color(color, 0.8), 3)
+	# The whole character jolts when struck, so even small hits feel like they land.
+	var jolt := Vector2(sin(time * 70.0), 0.0) * hit * 5.0
+	var mood := "hurt" if hit > 0.25 else ("angry" if angry else "idle")
+	var body := Rect2(rect.position + jolt + Vector2(0.0, -4.0), Vector2(rect.size.x, rect.size.y - 22.0))
+	BossArt.draw(canvas, id, body, mood, time)
 	if hit > 0.0:
-		panel(rect, Color(1.0, 1.0, 1.0, hit * 0.55), 22.0)
-	var bar := Rect2(rect.position + Vector2(18.0, rect.size.y - 26.0), Vector2(rect.size.x - 36.0, 12.0))
-	panel(bar, Color(0.0, 0.0, 0.0, 0.4), 6.0)
-	panel(Rect2(bar.position, Vector2(maxf(bar.size.x * ratio, 12.0), bar.size.y)), UI.GOLD, 6.0)
-	text_center(rect.get_center() + Vector2(0.0, 8.0), I18n.format_number(block["hp"]), 30, Color.WHITE)
-
-
-func _draw_boss_face(rect: Rect2) -> void:
-	var c := rect.get_center()
-	var eye := rect.size.x * 0.2
-	var r := minf(rect.size.y * 0.13, 11.0)
-	var y := -rect.size.y * 0.25
-	canvas.draw_circle(c + Vector2(-eye, y), r, Color.WHITE)
-	canvas.draw_circle(c + Vector2(eye, y), r, Color.WHITE)
-	canvas.draw_circle(c + Vector2(-eye, y), r * 0.5, UI.INK)
-	canvas.draw_circle(c + Vector2(eye, y), r * 0.5, UI.INK)
+		panel(rect, Color(1.0, 1.0, 1.0, hit * 0.3), 22.0)
+	if sim.is_boss_guarded():
+		var pulse := 0.5 + sin(time * 4.0) * 0.5
+		panel(rect.grow(5.0 + pulse * 3.0), Color("8be9fd", 0.08), 28.0, Color("8be9fd", 0.55 + pulse * 0.4), 4)
+	var bar := Rect2(rect.position + Vector2(14.0, rect.size.y - 28.0), Vector2(rect.size.x - 28.0, 22.0))
+	panel(bar, Color(0.0, 0.0, 0.0, 0.62), 11.0)
+	panel(Rect2(bar.position, Vector2(maxf(bar.size.x * ratio, 16.0), bar.size.y)), UI.DANGER if angry else UI.GOLD, 11.0)
+	var hp_text := I18n.format_number(block["hp"])
+	text_center(bar.get_center() + Vector2(1.0, 2.5), hp_text, 20, Color(0.0, 0.0, 0.0, 0.85))
+	text_center(bar.get_center() + Vector2(0.0, 1.0), hp_text, 20, Color.WHITE)
 
 
 func _block_color(block: Dictionary) -> Color:
+	if block.has("tint"):
+		return Bosses.color("purun")
 	var kind: String = block["kind"]
 	if UI.BLOCKS.has(kind):
 		return UI.BLOCKS[kind]

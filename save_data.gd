@@ -27,6 +27,7 @@ var runs := 0
 var lifetime := {}
 var achievements := {}
 var perks_seen := {}
+var bosses_met := {}
 var ball_type := "normal"
 var tier := 0
 
@@ -59,6 +60,7 @@ func load_file() -> void:
 	lifetime = _int_map(data.get("lifetime", {}))
 	achievements = _flag_map(data.get("achievements", {}))
 	perks_seen = _flag_map(data.get("perks_seen", {}))
+	bosses_met = _flag_map(data.get("bosses_met", {}))
 	var saved_ball := String(data.get("ball_type", ball_type))
 	ball_type = saved_ball if Balls.BALLS.has(saved_ball) else "normal"
 	tier = int(data.get("tier", tier))
@@ -104,6 +106,7 @@ func save_file() -> bool:
 		"lifetime": lifetime,
 		"achievements": achievements,
 		"perks_seen": perks_seen,
+		"bosses_met": bosses_met,
 		"ball_type": ball_type,
 		"tier": tier,
 	}, "  "))
@@ -123,6 +126,7 @@ func run_config(emit_events := true) -> Dictionary:
 		"stars": stars,
 		"unlocked_perks": unlocked_perks(),
 		"tutorial_offer": runs == 0,
+		"boss_met": bosses_met.keys(),
 		"emit_events": emit_events,
 	}
 
@@ -205,6 +209,10 @@ func prestige() -> bool:
 func mark_perk_seen(id: String) -> void:
 	perks_seen[id] = true
 	lifetime["perks_seen"] = perks_seen.size()
+
+
+func mark_boss_met(id: String) -> void:
+	bosses_met[id] = true
 
 
 ## summary: damage, combo, best_shot, stage, coins, won, tier, ball_type, counters.

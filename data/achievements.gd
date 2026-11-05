@@ -29,6 +29,12 @@ const TRACKS := {
 	"clears_ghost": [1],
 	"clears_lucky": [1],
 	"clears_titan": [1],
+	"boss_purun": [1],
+	"boss_mogu": [1],
+	"boss_gantetsu": [1],
+	"boss_dokan": [1],
+	"boss_lumina": [1],
+	"boss_zero": [1],
 }
 
 ## Stats where the highest single value counts, instead of a running total.
