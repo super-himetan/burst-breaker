@@ -7,6 +7,7 @@ const Balls := preload("res://data/balls.gd")
 const Perks := preload("res://data/perks.gd")
 const Shop := preload("res://data/shop.gd")
 const StarTree := preload("res://data/star_tree.gd")
+const RunContent := preload("res://data/run_content.gd")
 
 const DEFAULT_PATH := "user://save.json"
 const VOLUME_MAX := 10
@@ -42,6 +43,8 @@ var tier := 0
 var interrupted_run := {}
 var star_nodes := {}
 var mastery := {}
+var pilot := "rookie"
+var contract := "none"
 
 
 func _init(save_path := DEFAULT_PATH) -> void:
@@ -86,6 +89,10 @@ func load_file() -> void:
 	if star_points_left() < 0:
 		star_nodes = {}
 	mastery = _int_map(data.get("mastery", {}), Balls.BALLS)
+	var saved_pilot := String(data.get("pilot", pilot))
+	pilot = saved_pilot if RunContent.PILOTS.has(saved_pilot) else "rookie"
+	var saved_contract := String(data.get("contract", contract))
+	contract = saved_contract if RunContent.CONTRACTS.has(saved_contract) else "none"
 
 
 ## JSON turns every number into a float, and a damaged entry should not break the save.
@@ -157,6 +164,8 @@ func save_file() -> bool:
 		"interrupted_run": interrupted_run,
 		"star_nodes": star_nodes,
 		"mastery": mastery,
+		"pilot": pilot,
+		"contract": contract,
 	}, "  "))
 	file.close()
 	return DirAccess.rename_absolute(tmp, path) == OK
@@ -177,6 +186,10 @@ func run_config(emit_events := true) -> Dictionary:
 		"boss_met": bosses_met.keys(),
 		"star_nodes": star_nodes,
 		"mastery": mastery_level(ball_type),
+		"routes": true,
+		"missions": true,
+		"pilot": pilot,
+		"contract": contract,
 		"emit_events": emit_events,
 	}
 
@@ -197,6 +210,26 @@ func is_perk_unlocked(id: String) -> bool:
 	if not Perks.starts_locked(id):
 		return true
 	return has_achievement(Achievements.locks_for_perk(id))
+
+
+func is_pilot_unlocked(id: String) -> bool:
+	var unlock := String(RunContent.PILOTS[id]["unlock"])
+	return unlock == "" or has_achievement(unlock)
+
+
+func cycle_pilot() -> void:
+	var ids := RunContent.ids_of(RunContent.PILOTS)
+	var index := ids.find(pilot)
+	for i in ids.size():
+		index = (index + 1) % ids.size()
+		if is_pilot_unlocked(ids[index]):
+			pilot = ids[index]
+			return
+
+
+func cycle_contract() -> void:
+	var ids := RunContent.ids_of(RunContent.CONTRACTS)
+	contract = ids[(ids.find(contract) + 1) % ids.size()]
 
 
 func is_ball_unlocked(id: String) -> bool:

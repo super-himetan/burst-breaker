@@ -14,6 +14,7 @@ const Bosses := preload("res://data/bosses.gd")
 const BossArt := preload("res://boss_art.gd")
 const Achievements := preload("res://data/achievements.gd")
 const Shop := preload("res://data/shop.gd")
+const RunContent := preload("res://data/run_content.gd")
 const PerkArt := preload("res://perk_art.gd")
 const UI := preload("res://ui_theme.gd")
 const BackgroundShader := preload("res://shaders/background.gdshader")
@@ -882,8 +883,18 @@ func _on_key(key: int) -> void:
 					return
 		KEY_1, KEY_2, KEY_3, KEY_4:
 			var index: int = key - KEY_1
-			if screen == Menus.Screen.GAME and sim.state == GameSim.State.UPGRADE and index < sim.choices.size():
-				_on_press(card_rect(index, sim.choices.size()).get_center())
+			if screen != Menus.Screen.GAME:
+				return
+			var count := 0
+			match sim.state:
+				GameSim.State.UPGRADE:
+					count = sim.choices.size()
+				GameSim.State.ROUTE:
+					count = sim.route_options.size()
+				GameSim.State.EVENT:
+					count = (sim.event["options"] as Array).size()
+			if index < count:
+				_on_press(card_rect(index, count).get_center())
 
 
 func _tap_button_by_id(id: String) -> bool:
@@ -920,6 +931,22 @@ func _on_press(p: Vector2) -> void:
 		GameSim.State.AIM:
 			aiming = true
 			aim_current = p
+		GameSim.State.ROUTE:
+			if screen_age < ACCEPT_INPUT_AFTER:
+				return
+			for i in sim.route_options.size():
+				if card_rect(i, sim.route_options.size()).has_point(p):
+					_play("pick", 1.0)
+					sim.choose_route(sim.route_options[i])
+					return
+		GameSim.State.EVENT:
+			if screen_age < ACCEPT_INPUT_AFTER:
+				return
+			var count: int = (sim.event["options"] as Array).size()
+			for i in count:
+				if card_rect(i, count).has_point(p):
+					_play("coin" if sim.choose_event(i) else "lose", 1.0)
+					return
 		GameSim.State.UPGRADE:
 			if screen_age < ACCEPT_INPUT_AFTER:
 				return
@@ -1016,6 +1043,8 @@ func _press_button(id: String) -> void:
 			sim.reroll_choices()
 		"burst":
 			_begin_burst()
+		"event_leave":
+			sim.leave_event()
 		"to_title":
 			_bank_run()
 			paused = false
@@ -1029,14 +1058,18 @@ func current_buttons() -> Array[Dictionary]:
 	if burst_windup >= 0.0 or evolve_cut >= 0.0 or (boss_intro >= 0.0 and not paused) or (boss_down > 0.0 and not paused):
 		return list
 	if paused:
-		list.append(_button("resume", Rect2(110.0, 430.0, 500.0, 120.0), t("resume"), "primary"))
-		list.append(_button("settings", Rect2(110.0, 570.0, 500.0, 100.0), t("settings")))
-		list.append(_button("restart", Rect2(110.0, 690.0, 500.0, 100.0), t("restart")))
-		list.append(_button("to_title", Rect2(110.0, 810.0, 500.0, 100.0), t("to_title")))
+		list.append(_button("resume", Rect2(110.0, 510.0, 500.0, 110.0), t("resume"), "primary"))
+		list.append(_button("settings", Rect2(110.0, 636.0, 500.0, 84.0), t("settings")))
+		list.append(_button("restart", Rect2(110.0, 736.0, 500.0, 84.0), t("restart")))
+		list.append(_button("to_title", Rect2(110.0, 836.0, 500.0, 84.0), t("to_title")))
 	elif is_run_over():
 		list.append(_button("restart", Rect2(70.0, 930.0, 580.0, 120.0), t("retry"), "primary"))
 		list.append(_button("shop", Rect2(70.0, 1066.0, 282.0, 100.0), t("shop")))
 		list.append(_button("to_title", Rect2(368.0, 1066.0, 282.0, 100.0), t("to_title")))
+	elif sim.state == GameSim.State.ROUTE:
+		pass
+	elif sim.state == GameSim.State.EVENT:
+		list.append(_button("event_leave", Rect2(160.0, 1110.0, 400.0, 90.0), t("event_leave")))
 	elif sim.state == GameSim.State.UPGRADE:
 		if sim.rerolls > 0:
 			list.append(_button("reroll", Rect2(160.0, 1110.0, 400.0, 90.0), t("reroll_button") % sim.rerolls))
@@ -1078,6 +1111,17 @@ func _consume_events() -> void:
 				_spawn_particles(e["pos"], UI.BLOCKS["regen"], 3, 90.0)
 			"breed":
 				_spawn_particles(e["pos"], UI.BLOCKS["breeder"], 8, 180.0)
+			"companion":
+				_play("pick", 2.0)
+			"relic":
+				toasts.append({"text": t("relic_toast") % t("relic_" + String(e["id"])), "t": 0.0})
+				_play("win", 1.5)
+			"mission":
+				toasts.append({"text": t("mission_toast") % I18n.format_number(e["coins"]), "t": 0.0})
+				_play("win", 1.6)
+			"gamble":
+				_play("win" if e["won"] else "lose", 1.0)
+				_show_banner(t("gamble_won" if e["won"] else "gamble_lost"), 1.0)
 			"bumper":
 				_spawn_particles(e["pos"], UI.STAR, 8, 320.0)
 				if time - last_bumper_sound > 0.05:
@@ -1554,6 +1598,10 @@ func _draw_game_ui() -> void:
 		match sim.state:
 			GameSim.State.UPGRADE:
 				_draw_upgrade_screen()
+			GameSim.State.ROUTE:
+				_draw_route_screen()
+			GameSim.State.EVENT:
+				_draw_event_screen()
 			GameSim.State.WON:
 				_draw_end_screen(t("you_win"), UI.GOLD)
 			GameSim.State.LOST:
@@ -1574,7 +1622,8 @@ func _draw_game_ui() -> void:
 		_draw_evolve_cut()
 	if paused:
 		fill_screen(Color(UI.INK, 0.82))
-		text_center(Vector2(BASE_W / 2.0, 310.0), t("paused"), 76, UI.TEXT)
+		text_center(Vector2(BASE_W / 2.0, 230.0), t("paused"), 76, UI.TEXT)
+		_draw_missions(Vector2(110.0, 330.0))
 		_draw_build(950.0, 3)
 
 
@@ -1904,7 +1953,15 @@ func _draw_balls() -> void:
 		canvas.draw_circle(ball.pos, radius, color)
 
 
+func _draw_companion() -> void:
+	if sim.stat("companion") <= 0.0:
+		return
+	var p := Vector2(sim.launch_x, GameSim.LAUNCH_Y) + Vector2(cos(time * 1.6) * 60.0, sin(time * 3.2) * 12.0 - 8.0)
+	PerkArt.draw_glyph(canvas, "pal", p, 15.0, PerkArt.TAG_COLORS["swarm"])
+
+
 func _draw_launcher() -> void:
+	_draw_companion()
 	if sim.state != GameSim.State.AIM:
 		return
 	var p := Vector2(sim.launch_x, GameSim.LAUNCH_Y)
@@ -2037,6 +2094,71 @@ func _draw_card(id: String, rect: Rect2, alpha: float) -> void:
 		_draw_card_path(path, Vector2(rect.end.x - CARD_PATH_WIDTH / 2.0, middle), alpha)
 
 
+func _draw_route_screen() -> void:
+	fill_screen(Color(UI.INK, 0.86))
+	text_center(Vector2(BASE_W / 2.0, 200.0), t("route_title"), 56, UI.TEXT)
+	var count := sim.route_options.size()
+	for i in count:
+		var id := sim.route_options[i]
+		var data: Dictionary = RunContent.ROUTES[id]
+		_draw_option_card(card_rect(i, count), data["glyph"], t("route_" + id), t("route_%s_desc" % id), Color(String(data["color"])), _card_alpha(i))
+
+
+func _card_alpha(index: int) -> float:
+	return 1.0 - pow(1.0 - clampf((screen_age - index * 0.06) / 0.22, 0.0, 1.0), 3.0)
+
+
+func _draw_event_screen() -> void:
+	fill_screen(Color(UI.INK, 0.86))
+	var kind: String = sim.event["kind"]
+	var heading := t("event_" + kind)
+	if kind == "shrine":
+		heading = t("shrine_%s_title" % String(sim.event["shrine"]))
+	text_center(Vector2(BASE_W / 2.0, 200.0), heading, fit_size(heading, 54, 640.0), UI.TEXT)
+	var options: Array = sim.event["options"]
+	for i in options.size():
+		var option: Dictionary = options[i]
+		var rect := card_rect(i, options.size())
+		var alpha := _card_alpha(i)
+		if option.has("perk"):
+			_draw_card(option["perk"], rect, alpha)
+			if option.has("cost"):
+				var affordable: bool = int(option["cost"]) <= sim.coins
+				text_right(Vector2(rect.end.x - 24.0, rect.position.y + 30.0), I18n.format_number(option["cost"]), 28, Color(UI.GOLD if affordable else UI.DANGER, alpha))
+		elif option.has("relic"):
+			var data: Dictionary = RunContent.RELICS[option["relic"]]
+			_draw_option_card(rect, data["glyph"], t("relic_" + String(option["relic"])), t("relic_%s_desc" % String(option["relic"])), UI.GOLD, alpha)
+		else:
+			var key := "shrine_%s_%s" % [String(option["shrine"]), String(option["choice"])]
+			_draw_option_card(rect, "crown", t(key), t(key + "_desc"), UI.STAR, alpha)
+
+
+func _draw_option_card(rect: Rect2, glyph: String, title: String, desc: String, color: Color, alpha: float) -> void:
+	panel(rect, Color(UI.PANEL_SOLID, 0.96 * alpha), 30.0, Color(color, 0.55 * alpha), 2)
+	var icon_size := minf(rect.size.y - 40.0, CARD_ICON_MAX)
+	var icon_center := Vector2(rect.position.x + 24.0 + icon_size / 2.0, rect.get_center().y)
+	panel(Rect2(icon_center - Vector2.ONE * icon_size / 2.0, Vector2.ONE * icon_size), Color(color, 0.14 * alpha), icon_size * 0.24, Color(color, 0.5 * alpha), 2)
+	PerkArt.draw_glyph(canvas, glyph, icon_center, icon_size * 0.36, Color(color, alpha))
+	var text_x := icon_center.x + icon_size / 2.0 + 22.0
+	var text_width := rect.end.x - text_x - 24.0
+	text_left(Vector2(text_x, rect.get_center().y - 24.0), title, fit_size(title, 40, text_width), Color(color, alpha))
+	text_left(Vector2(text_x, rect.get_center().y + 22.0), desc, fit_size(desc, 25, text_width), Color(UI.TEXT, 0.82 * alpha), font_body)
+
+
+func _draw_missions(start: Vector2) -> void:
+	for i in sim.missions.size():
+		var mission: Dictionary = sim.missions[i]
+		var y := start.y + i * 50.0
+		var line := t("mission_" + String(mission["stat"])) % int(mission["target"])
+		var done: bool = mission["done"]
+		text_left(Vector2(start.x, y), line, fit_size(line, 24, 500.0), UI.MINT if done else UI.TEXT, font_body)
+		var bar := Rect2(start.x, y + 20.0, 500.0, 6.0)
+		panel(bar, Color(1.0, 1.0, 1.0, 0.08), 3.0)
+		var progress := sim.mission_progress(mission)
+		if progress > 0.0:
+			panel(Rect2(bar.position, Vector2(maxf(bar.size.x * progress, 6.0), bar.size.y)), UI.MINT if done else UI.ACCENT, 3.0)
+
+
 func _feeds_build(id: String) -> bool:
 	var owned := sim.tag_levels()
 	for tag in Perks.tags_of(id):
@@ -2079,12 +2201,19 @@ func _draw_build(top: float, max_rows: int) -> void:
 			return a_evo
 		return int(sim.levels[a]) > int(sim.levels[b]))
 	var per_row := int((BASE_W - 100.0 + BUILD_GAP) / (BUILD_TILE + BUILD_GAP))
+	# Relics show first: they are what makes this run unlike the others.
+	for relic in sim.relics:
+		owned.insert(0, relic)
 	var shown := mini(owned.size(), per_row * max_rows)
 	for i in shown:
 		var row_index := i / per_row
 		var in_row := mini(shown - row_index * per_row, per_row)
 		var left := (BASE_W - in_row * (BUILD_TILE + BUILD_GAP) + BUILD_GAP) / 2.0
 		var tile := Rect2(left + (i % per_row) * (BUILD_TILE + BUILD_GAP), top + row_index * (BUILD_TILE + BUILD_GAP), BUILD_TILE, BUILD_TILE)
+		if RunContent.RELICS.has(owned[i]):
+			panel(tile, Color(UI.GOLD, 0.16), 14.0, UI.GOLD, 2)
+			PerkArt.draw_glyph(canvas, RunContent.RELICS[owned[i]]["glyph"], tile.get_center(), 18.0, UI.GOLD)
+			continue
 		var color: Color = PerkArt.color_of(owned[i])
 		var evolved := Perks.is_evolution(owned[i])
 		panel(tile, Color(color, 0.12), 14.0, UI.GOLD if evolved else Color(color, 0.35), 2)

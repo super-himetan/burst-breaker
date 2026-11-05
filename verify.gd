@@ -154,6 +154,24 @@ func _verify_play() -> void:
 				if not picked:
 					print("verify: card tap ignored state=%d age=%.2f evolve=%.2f paused=%s" % [host.sim.state, host.screen_age, host.evolve_cut, host.paused])
 				_check("upgrade_card_tap", picked)
+			GameSim.State.ROUTE:
+				await _wait(0.45)
+				if not saved.has("route"):
+					saved["route"] = true
+					await _shot("08b_route_ja")
+				var stage_at: int = host.sim.stage
+				await _tap_at(host.card_rect(0, host.sim.route_options.size()).get_center())
+				await _wait(0.05)
+				_check("route_card_tap", host.sim.state != GameSim.State.ROUTE or host.sim.stage > stage_at)
+			GameSim.State.EVENT:
+				await _wait(0.45)
+				var event_kind: String = host.sim.event["kind"]
+				if not saved.has("event_" + event_kind):
+					saved["event_" + event_kind] = true
+					await _shot("08c_event_%s_ja" % event_kind)
+				await _tap_button("event_leave")
+				await _wait(0.05)
+				_check("event_can_be_left", host.sim.state != GameSim.State.EVENT)
 	if host.sim.counters["kills"] <= 0:
 		_check("blocks_were_broken", false)
 	_check("shots_are_ranked", host.sim._style_shots > 0)

@@ -9,8 +9,9 @@ const Tiers := preload("res://data/tiers.gd")
 const Bosses := preload("res://data/bosses.gd")
 const Layouts := preload("res://data/layouts.gd")
 const Formations := preload("res://data/formations.gd")
+const RunContent := preload("res://data/run_content.gd")
 
-enum State { AIM, SHOOT, UPGRADE, WON, LOST }
+enum State { AIM, SHOOT, UPGRADE, WON, LOST, ROUTE, EVENT }
 
 const COLS := 7
 const CELL_W := 90.0
@@ -69,6 +70,9 @@ const PORTAL_RADIUS := 24.0
 const PORTAL_COOLDOWN := 0.25
 ## How far a rounded polygon's edge bends in from its cell, as a share of the cell.
 const PILL_SEGMENTS := 6
+## Hits it takes the companion to act, at one level.
+const COMPANION_HITS := 24
+const COMPANION_DAMAGE := 4.0
 const BOSS_STAGE_EXTRA_PICKS := 1
 const SLIME_STEP := 0.25
 const SLIME_PIECES := 3
@@ -123,6 +127,17 @@ var blocks := {}
 ## Unbreakable pieces by cell: {kind, cell, partner, dir, pulse}. They never count toward a clear.
 var obstacles := {}
 var _formation_rows: Array[Dictionary] = []
+## What the run is doing between stages. Routes appear only when the config turns them on.
+var routes_enabled := false
+var route_options: Array[String] = []
+var event := {}
+var relics: Array[String] = []
+var missions: Array[Dictionary] = []
+var _next_stage_hp := 1.0
+var _next_stage_coins := 1.0
+var _stage_hp_mult := 1.0
+var _stage_coin_mult := 1.0
+var _companion_hits := 0
 var balls: Array[Ball] = []
 var levels := {}
 var stats := {}
@@ -204,6 +219,16 @@ func new_run(seed_value: int, config := {}) -> void:
 	_boss_met = config.get("boss_met", [])
 	boss_force = String(config.get("boss_force", ""))
 	boss_force_own_pool = bool(config.get("boss_force_own_pool", false))
+	routes_enabled = bool(config.get("routes", false))
+	route_options = []
+	event = {}
+	relics = []
+	_next_stage_hp = 1.0
+	_next_stage_coins = 1.0
+	_stage_hp_mult = 1.0
+	_stage_coin_mult = 1.0
+	_companion_hits = 0
+	missions = []
 	_base_stats = _build_base_stats(config)
 	_coin_scale = Tiers.coin_scale(tier) * (1.0 + STAR_COINS * int(config.get("stars", 0)))
 	launch_x = FIELD_X + FIELD_W / 2.0
@@ -237,7 +262,10 @@ func new_run(seed_value: int, config := {}) -> void:
 	rerolls = int(stat("rerolls"))
 	if Tiers.has_rule(tier, "no_free_reroll"):
 		rerolls = 0
-	guards = int(stat("guards"))
+	guards = maxi(int(stat("guards")), 0)
+	rerolls = maxi(rerolls, 0)
+	if bool(config.get("missions", false)):
+		_roll_missions()
 	var start_picks := int(stat("start_perks"))
 	if _tutorial_offer:
 		start_picks = 0
@@ -439,11 +467,220 @@ func choose_upgrade(id: String) -> bool:
 	if picks_pending > 0:
 		_open_upgrade()
 		return true
-	if _is_stage_finished():
-		stage += 1
-		_start_stage()
-	state = State.AIM
+	_leave_stage()
 	return true
+
+
+## After the picks: on to the next stage, by way of a choice of road when routes are on.
+func _leave_stage() -> void:
+	if not _is_stage_finished():
+		state = State.AIM
+		return
+	if routes_enabled and stage < _final_stage():
+		route_options = _roll_routes()
+		state = State.ROUTE
+		_emit({"type": "route"})
+		return
+	_go_to_next_stage()
+
+
+func _go_to_next_stage() -> void:
+	stage += 1
+	_start_stage()
+	state = State.AIM
+
+
+func _final_stage() -> int:
+	return STAGES.size() - 1
+
+
+func _roll_routes() -> Array[String]:
+	var options: Array[String] = []
+	var pool := RunContent.ids_of(RunContent.ROUTES)
+	while options.size() < 2:
+		var total := 0.0
+		for id in pool:
+			total += float(RunContent.ROUTES[id]["weight"])
+		var roll := _rng.randf() * total
+		for id in pool:
+			roll -= float(RunContent.ROUTES[id]["weight"])
+			if roll <= 0.0:
+				options.append(id)
+				pool.erase(id)
+				break
+	return options
+
+
+func choose_route(id: String) -> bool:
+	if state != State.ROUTE or not route_options.has(id):
+		return false
+	route_options = []
+	match id:
+		"danger":
+			_next_stage_hp = RunContent.DANGER_HP
+			_next_stage_coins = RunContent.DANGER_COINS
+			_go_to_next_stage()
+		"altar":
+			_open_altar()
+		"merchant":
+			_open_merchant()
+		"shrine":
+			_open_shrine()
+		"treasure":
+			_grant_coins(RunContent.TREASURE_COINS * (stage + 1.0))
+			_open_relic_choice()
+		_:
+			_go_to_next_stage()
+	return true
+
+
+func _open_event(kind: String, options: Array[Dictionary], extra := {}) -> void:
+	if options.is_empty():
+		_go_to_next_stage()
+		return
+	event = {"kind": kind, "options": options}
+	event.merge(extra)
+	state = State.EVENT
+
+
+func _open_altar() -> void:
+	var options: Array[Dictionary] = []
+	var pool := Perks.curses().filter(func(id: String) -> bool: return int(levels[id]) <= 0)
+	for i in mini(3, pool.size()):
+		options.append({"perk": pool.pop_at(_rng.randi_range(0, pool.size() - 1))})
+	_open_event("altar", options)
+
+
+func _open_merchant() -> void:
+	var options: Array[Dictionary] = []
+	var offer := _roll_choices()
+	for id in offer.slice(0, RunContent.MERCHANT_OFFERS):
+		options.append({"perk": id, "cost": merchant_price(id)})
+	_open_event("merchant", options)
+
+
+func merchant_price(id: String) -> int:
+	return int(RunContent.MERCHANT_PRICE * (1 + int(Perks.PERKS[id]["rarity"])) * (stage + 1) * _coin_scale)
+
+
+func _open_relic_choice() -> void:
+	if relics.size() >= RunContent.MAX_RELICS:
+		_go_to_next_stage()
+		return
+	var pool := RunContent.ids_of(RunContent.RELICS).filter(func(id: String) -> bool: return not relics.has(id))
+	var options: Array[Dictionary] = []
+	for i in mini(3, pool.size()):
+		options.append({"relic": pool.pop_at(_rng.randi_range(0, pool.size() - 1))})
+	_open_event("relic", options)
+
+
+func _open_shrine() -> void:
+	var kind: String = RunContent.SHRINES[_rng.randi_range(0, RunContent.SHRINES.size() - 1)]
+	var options: Array[Dictionary] = [{"shrine": kind, "choice": "a"}]
+	if kind == "rest":
+		options.append({"shrine": kind, "choice": "b"})
+	_open_event("shrine", options, {"shrine": kind})
+
+
+## Takes one of the event's options. Returns false when it cannot be afforded.
+func choose_event(index: int) -> bool:
+	if state != State.EVENT or index < 0 or index >= (event["options"] as Array).size():
+		return false
+	var option: Dictionary = event["options"][index]
+	if int(option.get("cost", 0)) > coins:
+		return false
+	coins -= int(option.get("cost", 0))
+	if option.has("perk"):
+		_take_perk(option["perk"])
+	elif option.has("relic"):
+		take_relic(option["relic"])
+	elif option.has("shrine"):
+		_resolve_shrine(option["shrine"], option["choice"])
+	if event.get("kind") == "merchant":
+		(event["options"] as Array).remove_at(index)
+		if not (event["options"] as Array).is_empty():
+			return true
+	leave_event()
+	return true
+
+
+func leave_event() -> void:
+	if state != State.EVENT:
+		return
+	event = {}
+	_go_to_next_stage()
+
+
+func _take_perk(id: String) -> void:
+	levels[id] += 1
+	_recompute_stats()
+	guards = maxi(guards + int(Perks.PERKS[id]["add"].get("guards", 0.0)), 0)
+	_emit({"type": "perk_taken", "id": id})
+
+
+func take_relic(id: String) -> void:
+	if relics.size() >= RunContent.MAX_RELICS or relics.has(id):
+		return
+	relics.append(id)
+	_recompute_stats()
+	guards = maxi(guards + int(RunContent.RELICS[id]["add"].get("guards", 0.0)), 0)
+	_emit({"type": "relic", "id": id})
+
+
+func _resolve_shrine(kind: String, choice: String) -> void:
+	match kind:
+		"offering":
+			coins -= int(coins * RunContent.OFFERING_COST)
+			var pool: Array[String] = []
+			for id in Perks.ids():
+				if _is_perk_available(id) and int(Perks.PERKS[id]["rarity"]) >= Perks.RARE:
+					pool.append(id)
+			if not pool.is_empty():
+				_take_perk(pool[_rng.randi_range(0, pool.size() - 1)])
+		"gamble":
+			var won := _rng.randf() < 0.5
+			coins = int(coins * (RunContent.GAMBLE_WIN if won else RunContent.GAMBLE_LOSS))
+			_emit({"type": "gamble", "won": won})
+		"pact":
+			var curses := Perks.curses().filter(func(id: String) -> bool: return int(levels[id]) <= 0)
+			if not curses.is_empty():
+				_take_perk(curses[_rng.randi_range(0, curses.size() - 1)])
+			var relic_pool := RunContent.ids_of(RunContent.RELICS).filter(func(id: String) -> bool: return not relics.has(id))
+			if not relic_pool.is_empty():
+				take_relic(relic_pool[_rng.randi_range(0, relic_pool.size() - 1)])
+		"rest":
+			if choice == "a":
+				burst_charge = 1.0
+			else:
+				guards += 1
+		"mirror":
+			var owned: Array[String] = []
+			for id in Perks.ids():
+				if int(levels[id]) > 0 and int(levels[id]) < int(Perks.PERKS[id]["max"]):
+					owned.append(id)
+			if not owned.is_empty():
+				_take_perk(owned[_rng.randi_range(0, owned.size() - 1)])
+
+
+func _roll_missions() -> void:
+	var pool := RunContent.ids_of(RunContent.MISSIONS)
+	missions = []
+	for i in RunContent.MISSIONS_PER_RUN:
+		var id: String = pool.pop_at(_rng.randi_range(0, pool.size() - 1))
+		missions.append({"stat": id, "target": RunContent.MISSIONS[id]["target"], "done": false})
+
+
+func mission_progress(mission: Dictionary) -> float:
+	return clampf(float(counters.get(mission["stat"], 0)) / float(mission["target"]), 0.0, 1.0)
+
+
+func _check_missions() -> void:
+	for mission in missions:
+		if mission["done"] or mission_progress(mission) < 1.0:
+			continue
+		mission["done"] = true
+		var reward := _grant_coins(float(RunContent.MISSIONS[mission["stat"]]["reward"]) * (stage + 1))
+		_emit({"type": "mission", "stat": mission["stat"], "coins": reward})
 
 
 func reroll_choices() -> bool:
@@ -503,6 +740,8 @@ func _build_base_stats(config: Dictionary) -> Dictionary:
 	for id: String in shop:
 		if Shop.ITEMS.has(id):
 			Shop.apply(base, id, int(shop[id]))
+	_add_stats(base, RunContent.CONTRACTS.get(config.get("contract", "none"), RunContent.CONTRACTS["none"])["add"], 1)
+	_add_stats(base, RunContent.PILOTS.get(config.get("pilot", "rookie"), RunContent.PILOTS["rookie"])["add"], 1)
 	var star_nodes: Dictionary = config.get("star_nodes", {})
 	for id: String in star_nodes:
 		if StarTree.NODES.has(id):
@@ -529,6 +768,8 @@ func _recompute_stats() -> void:
 		var level: int = levels[id]
 		if level > 0:
 			_add_stats(stats, Perks.PERKS[id]["add"], level)
+	for relic in relics:
+		_add_stats(stats, RunContent.RELICS[relic]["add"], 1)
 	ball_count = maxi(int(stat("ball_count")), 1)
 	ball_radius = minf(BALL_RADIUS + stat("radius"), MAX_RADIUS)
 	ball_speed = BALL_SPEED * (1.0 + stat("speed_pct"))
@@ -539,6 +780,10 @@ func _start_stage() -> void:
 	balls = []
 	boss_block = null
 	bonus_balls = 0
+	_stage_hp_mult = _next_stage_hp
+	_stage_coin_mult = _next_stage_coins
+	_next_stage_hp = 1.0
+	_next_stage_coins = 1.0
 	_build_obstacles()
 	_pending_blasts = []
 	_launch_left = 0
@@ -577,7 +822,7 @@ func _build_obstacles() -> void:
 
 
 func _block_hp(base: float) -> int:
-	var scaled := base * Tiers.hp_scale(tier) * (1.0 - minf(stat("hp_reduction"), 0.5))
+	var scaled := base * Tiers.hp_scale(tier) * (1.0 - minf(stat("hp_reduction"), 0.5)) * _stage_hp_mult
 	return maxi(int(ceil(scaled)), 1)
 
 
@@ -1141,6 +1386,7 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		best_combo = maxi(best_combo, combo)
 		if not _burst_shot:
 			_charge_burst()
+			_companion_hit()
 	if flags.get("poison", false):
 		counters["poison_damage"] += dealt
 	var center := block_rect(block).get_center()
@@ -1159,6 +1405,19 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		_kill_block(cell, block, flags, _overkill_steps(amount, block, flags))
 	elif block["kind"] == "boss":
 		_on_boss_hurt(block)
+
+
+## The companion watches the ball work, and joins in every so often.
+func _companion_hit() -> void:
+	var level := stat("companion")
+	if level <= 0.0:
+		return
+	_companion_hits += 1
+	if _companion_hits < int(COMPANION_HITS / level):
+		return
+	_companion_hits = 0
+	_strike_random(1, COMPANION_DAMAGE * (1.0 + stat("companion_damage")) + stat("flat_damage"))
+	_emit({"type": "companion"})
 
 
 func _charge_burst() -> void:
@@ -1222,7 +1481,7 @@ func _spread_plague(cell: Vector2i, poison: int) -> void:
 
 ## Fractions carry over, so small rewards still add up exactly.
 func _grant_coins(base: float) -> int:
-	_coin_carry += base * (1.0 + stat("coin_pct")) * _coin_scale
+	_coin_carry += base * (1.0 + stat("coin_pct")) * _coin_scale * _stage_coin_mult
 	var amount := int(_coin_carry)
 	_coin_carry -= amount
 	coins += amount
@@ -1328,6 +1587,7 @@ func _end_shot() -> void:
 		return
 	_apply_end_of_shot()
 	_rate_shot()
+	_check_missions()
 	if _is_stage_finished():
 		_clear_stage()
 		return
@@ -1835,6 +2095,10 @@ func _clear_stage() -> void:
 	picks_pending = 1
 	if STAGES[stage].has("boss"):
 		picks_pending += BOSS_STAGE_EXTRA_PICKS
+		# Beating a boss is what relics are for, when the run has roads to spend them on.
+		if routes_enabled and relics.size() < RunContent.MAX_RELICS:
+			var pool := RunContent.ids_of(RunContent.RELICS).filter(func(id: String) -> bool: return not relics.has(id))
+			take_relic(pool[_rng.randi_range(0, pool.size() - 1)])
 	_emit({"type": "stage_clear", "stage": stage})
 	_open_upgrade()
 
@@ -1845,10 +2109,7 @@ func _open_upgrade() -> void:
 	if choices.is_empty():
 		# Everything is maxed out: nothing to offer, so move straight on.
 		picks_pending = 0
-		if _is_stage_finished():
-			stage += 1
-			_start_stage()
-		state = State.AIM
+		_leave_stage()
 
 
 func _is_perk_unlocked(id: String) -> bool:
@@ -1858,6 +2119,8 @@ func _is_perk_unlocked(id: String) -> bool:
 func _is_perk_available(id: String) -> bool:
 	var perk: Dictionary = Perks.PERKS[id]
 	if int(levels[id]) >= int(perk["max"]):
+		return false
+	if Perks.is_curse(id):
 		return false
 	if Perks.is_evolution(id):
 		for required: String in perk["requires"]:

@@ -9,6 +9,7 @@ const INK := Color("17122b")
 const EVOLUTION_SCALE := 0.62
 const EVOLUTION_OFFSET := 0.42
 const SPARK_COLOR := Color("fff1a8")
+const CURSE_COLOR := Color("c0392b")
 const TAG_COLORS := {
 	"split": Color("4fd1ff"),
 	"blast": Color("ff9a3d"),
@@ -35,6 +36,9 @@ const ICONS := {
 	"thin": ["squeeze"], "greed": ["coin"], "treasure": ["chest"], "interest": ["coin_stack"],
 	"reroll": ["reroll"], "extra_choice": ["cards"], "lucky": ["clover"], "bounty": ["crown"],
 	"reinforce": ["single_ball", "plus"], "overdrive": ["gauge"], "momentum": ["steps"], "last_stand": ["flag"],
+	"companion": ["pal"], "companion_power": ["pal", "plus"],
+	"c_berserk": ["slash"], "c_blood": ["drop"], "c_gold": ["coin"], "c_haste": ["chevrons"],
+	"c_lightning": ["bolt"], "c_titan": ["big_ball"], "c_narrow": ["cards"], "c_doom": ["bomb"],
 }
 
 ## Shapes: poly/ipoly [points], line/iline [points, width], disc/idisc [x, y, r],
@@ -84,6 +88,7 @@ const GLYPHS := {
 	"gauge": [["arc", 0, 0.28, 0.78, 180, 360, 0.2], ["line", [0, 0.28, 0.5, -0.32], 0.15], ["disc", 0, 0.28, 0.16]],
 	"steps": [["line", [-0.62, 0.86, -0.62, 0.3], 0.32], ["line", [0, 0.86, 0, -0.18], 0.32], ["line", [0.62, 0.86, 0.62, -0.78], 0.32]],
 	"flag": [["line", [-0.52, -0.92, -0.52, 0.92], 0.15], ["poly", [-0.46, -0.88, 0.8, -0.45, -0.46, -0.02]]],
+	"pal": [["disc", 0, 0.1, 0.62], ["idisc", -0.24, 0, 0.13], ["idisc", 0.24, 0, 0.13], ["line", [-0.42, -0.42, -0.62, -0.88], 0.14], ["line", [0.42, -0.42, 0.62, -0.88], 0.14]],
 	"gear": [["ring", 0, 0, 0.5, 0.26], ["line", [0, -0.95, 0, -0.65], 0.24], ["line", [0, 0.65, 0, 0.95], 0.24], ["line", [-0.95, 0, -0.65, 0], 0.24], ["line", [0.65, 0, 0.95, 0], 0.24], ["line", [-0.67, -0.67, -0.46, -0.46], 0.24], ["line", [0.46, -0.46, 0.67, -0.67], 0.24], ["line", [-0.67, 0.67, -0.46, 0.46], 0.24], ["line", [0.46, 0.46, 0.67, 0.67], 0.24]],
 }
 
@@ -111,8 +116,12 @@ static func draw(canvas: CanvasItem, id: String, center: Vector2, radius: float,
 
 
 static func draw_single(canvas: CanvasItem, id: String, center: Vector2, radius: float, alpha := 1.0) -> void:
+	if Perks.is_evolution(id):
+		draw(canvas, id, center, radius, alpha)
+		return
 	var icon: Array = ICONS[id]
-	var color := Color(color_of(id), alpha)
+	# A curse wears its own colour, so its price can be seen before its name is read.
+	var color := Color(CURSE_COLOR if Perks.is_curse(id) else color_of(id), alpha)
 	for shape: Array in GLYPHS[icon[0]]:
 		_draw_shape(canvas, shape, center, radius, color)
 	if icon.size() > 1:

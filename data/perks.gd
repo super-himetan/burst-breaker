@@ -4,6 +4,7 @@ extends RefCounted
 ## `locked` perks join the pool once the matching achievement unlocks them.
 ## `tags` name the build a perk belongs to; owning a tag makes its other perks show up more.
 ## `needs` names a stat that must already be above zero, or the perk would do nothing.
+## `curse` perks stay out of normal offers: only the altar and shrines hand them out.
 
 const COMMON := 0
 const RARE := 1
@@ -69,6 +70,18 @@ const PERKS := {
 	"overdrive": {"rarity": EPIC, "max": 1, "tags": ["power"], "add": {"damage_pct": 0.7, "wave_delta": 1.0}, "locked": true},
 	"momentum": {"rarity": RARE, "max": 3, "tags": ["power"], "add": {"momentum": 0.1}},
 	"last_stand": {"rarity": EPIC, "max": 1, "tags": ["guard"], "add": {"last_stand": 1.0}, "locked": true},
+	# Companion
+	"companion": {"rarity": RARE, "max": 3, "tags": ["swarm"], "add": {"companion": 1.0}},
+	"companion_power": {"rarity": RARE, "max": 3, "tags": ["swarm"], "needs": "companion", "add": {"companion_damage": 1.0}},
+	# Curses: much stronger, with a real price.
+	"c_berserk": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["power"], "add": {"damage_pct": 1.0, "ball_count": -3.0}},
+	"c_blood": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["power"], "add": {"damage_pct": 0.7, "wave_delta": 1.0}},
+	"c_gold": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["fortune"], "add": {"coin_pct": 2.0, "hp_reduction": -0.25}},
+	"c_haste": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["swarm"], "add": {"launch_speed": 2.0, "speed_pct": 0.5, "damage_pct": -0.2}},
+	"c_lightning": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["crit"], "add": {"crit_chance": 0.4, "burst_gain": -0.6}},
+	"c_titan": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["power"], "add": {"radius": 6.0, "damage_pct": 0.5, "speed_pct": -0.25}},
+	"c_narrow": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["guard"], "add": {"damage_pct": 0.8, "extra_choices": -1.0}},
+	"c_doom": {"rarity": EPIC, "max": 1, "curse": true, "tags": ["blast"], "add": {"bomb_chance": 0.5, "bomb_damage": 1.0, "guards": -99.0}},
 	# Evolutions: offered once both required perks are owned.
 	"e_cluster": {"rarity": LEGENDARY, "max": 1, "requires": ["split", "bomb"], "add": {"cluster": 1.0, "split_chance": 0.1}},
 	"e_storm": {"rarity": LEGENDARY, "max": 1, "requires": ["shock", "crit"], "add": {"crit_shock": 1.0, "crit_chance": 0.1}},
@@ -82,6 +95,14 @@ const PERKS := {
 	"e_plague": {"rarity": LEGENDARY, "max": 1, "requires": ["poison", "shockwave"], "add": {"poison": 2.0, "plague": 1.0}},
 	"e_fortress": {"rarity": LEGENDARY, "max": 1, "requires": ["stall", "intercept"], "add": {"intercept_pct": 0.1, "safe_damage": 0.06}},
 	"e_lance": {"rarity": LEGENDARY, "max": 1, "requires": ["power", "first_strike"], "add": {"first_strike": 1.0, "first_refresh": 1.0}},
+	"e_pack": {"rarity": LEGENDARY, "max": 1, "requires": ["companion", "reinforce"], "add": {"companion": 2.0, "companion_damage": 2.0}},
+	# Ultimates: two evolutions fused into one.
+	"u_cataclysm": {"rarity": LEGENDARY, "max": 1, "requires": ["e_cluster", "e_inferno"], "add": {"bomb_damage": 3.0, "bomb_radius": 1.0, "chain_chance": 0.5}},
+	"u_judgement": {"rarity": LEGENDARY, "max": 1, "requires": ["e_storm", "e_executioner"], "add": {"crit_chance": 0.2, "crit_mult": 3.0}},
+	"u_ragnarok": {"rarity": LEGENDARY, "max": 1, "requires": ["e_barrage", "e_singularity"], "add": {"ball_count": 10.0, "damage_pct": 1.0}},
+	"u_paradox": {"rarity": LEGENDARY, "max": 1, "requires": ["e_mirror", "e_echo"], "add": {"wall_damage": 8.0, "rebound_chance": 0.3}},
+	"u_kingdom": {"rarity": LEGENDARY, "max": 1, "requires": ["e_midas", "e_fortress"], "add": {"coin_pct": 2.0, "safe_damage": 0.1, "guards": 1.0}},
+	"u_pestilence": {"rarity": LEGENDARY, "max": 1, "requires": ["e_plague", "e_lance"], "add": {"poison": 5.0, "first_strike": 2.0}},
 }
 
 
@@ -106,9 +127,23 @@ static func tags_of(id: String) -> Array[String]:
 	var perk: Dictionary = PERKS[id]
 	var sources: Array = perk["requires"] if perk.has("requires") else [id]
 	for source: String in sources:
-		for tag: String in PERKS[source]["tags"]:
+		# An ultimate's parents are evolutions, so this walks down to the normal perks.
+		var inherited: Array = tags_of(source) if is_evolution(source) else PERKS[source]["tags"]
+		for tag: String in inherited:
 			if not list.has(tag):
 				list.append(tag)
+	return list
+
+
+static func is_curse(id: String) -> bool:
+	return bool(PERKS[id].get("curse", false))
+
+
+static func curses() -> Array[String]:
+	var list: Array[String] = []
+	for id: String in PERKS:
+		if is_curse(id):
+			list.append(id)
 	return list
 
 

@@ -15,6 +15,7 @@ const StarTree := preload("res://data/star_tree.gd")
 const PerkArt := preload("res://perk_art.gd")
 const Layouts := preload("res://data/layouts.gd")
 const Formations := preload("res://data/formations.gd")
+const RunContent := preload("res://data/run_content.gd")
 const DT := 1.0 / 60.0
 
 var failures := 0
@@ -76,6 +77,8 @@ func _init() -> void:
 	_test_obstacles()
 	_test_block_shapes()
 	_test_formations()
+	_test_routes_and_events()
+	_test_run_content()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -288,7 +291,7 @@ func _test_shot_always_finishes() -> void:
 ## Compares one fixed scenario with and without each perk, so a perk that silently does
 ## nothing shows up here. Perks that only act outside a shot are compared by stats.
 func _test_every_perk_changes_something() -> void:
-	var by_stats := ["reroll", "extra_choice", "lucky", "guard", "treasure", "reinforce", "short_waves", "thin", "stall", "overdrive", "interest", "bounty"]
+	var by_stats := ["companion_power", "c_gold", "c_lightning", "c_narrow", "c_blood", "u_kingdom", "reroll", "extra_choice", "lucky", "guard", "treasure", "reinforce", "short_waves", "thin", "stall", "overdrive", "interest", "bounty"]
 	var baseline := _perk_probe("")
 	for id in Perks.ids():
 		if by_stats.has(id):
@@ -496,7 +499,7 @@ func _test_build_data_is_complete() -> void:
 		_check(not Perks.tags_of(id).is_empty(), "perk %s belongs to a build" % id)
 		if Perks.is_evolution(id):
 			for parent: String in Perks.PERKS[id]["requires"]:
-				_check(Perks.PERKS.has(parent) and not Perks.is_evolution(parent), "evolution %s comes from a normal perk (%s)" % [id, parent])
+				_check(Perks.PERKS.has(parent), "evolution %s has real parents (%s)" % [id, parent])
 	for ball in Balls.ids():
 		for tag: String in Balls.BALLS[ball]["tags"]:
 			_check(Perks.TAGS.has(tag), "ball %s has a known tag (%s)" % [ball, tag])
@@ -1082,7 +1085,7 @@ func _test_achievements_data() -> void:
 	for id in Perks.ids():
 		if Perks.is_evolution(id):
 			for required: String in Perks.PERKS[id]["requires"]:
-				ok = ok and Perks.PERKS.has(required) and not Perks.is_evolution(required)
+				ok = ok and Perks.PERKS.has(required)
 	_check(ok, "evolutions name real parents")
 
 
@@ -1729,6 +1732,157 @@ func _test_formations() -> void:
 	waves.stage = 4
 	waves._start_stage()
 	_check(waves.waves_left == int(GameSim.STAGES[4]["waves"]), "formations keep the stage's wave count")
+
+
+func _route_sim(seed_value := 1) -> GameSim:
+	var sim := _sim(seed_value, {"routes": true})
+	sim.blocks = {}
+	sim.waves_left = 0
+	sim.boss_block = null
+	sim.picks_pending = 1
+	sim.state = GameSim.State.UPGRADE
+	sim.choices = ["split", "bomb", "crit"] as Array[String]
+	return sim
+
+
+func _test_routes_and_events() -> void:
+	var sim := _route_sim()
+	sim.choose_upgrade("split")
+	_check(sim.state == GameSim.State.ROUTE and sim.route_options.size() == 2, "after a pick the run offers two roads")
+	_check(sim.route_options[0] != sim.route_options[1], "the two roads differ")
+	var plain := _sim(1)
+	plain.blocks = {}
+	plain.waves_left = 0
+	plain.picks_pending = 1
+	plain.state = GameSim.State.UPGRADE
+	plain.choices = ["split"] as Array[String]
+	plain.choose_upgrade("split")
+	_check(plain.state == GameSim.State.AIM and plain.stage == 1, "without routes the run goes straight on")
+
+	sim = _route_sim()
+	sim.choose_upgrade("split")
+	sim.route_options = ["danger", "battle"] as Array[String]
+	var stage_before := sim.stage
+	sim.choose_route("danger")
+	_check(sim.stage == stage_before + 1 and sim.state == GameSim.State.AIM and is_equal_approx(sim._stage_hp_mult, RunContent.DANGER_HP), "the dangerous road toughens the next stage")
+	_check(is_equal_approx(sim._stage_coin_mult, RunContent.DANGER_COINS), "the dangerous road pays for it")
+	sim._go_to_next_stage()
+	_check(is_equal_approx(sim._stage_hp_mult, 1.0), "the danger fades after one stage")
+
+	sim = _route_sim()
+	sim.choose_upgrade("split")
+	sim.route_options = ["altar", "battle"] as Array[String]
+	sim.choose_route("altar")
+	_check(sim.state == GameSim.State.EVENT and sim.event["kind"] == "altar" and (sim.event["options"] as Array).size() == 3, "the altar offers curses")
+	var curse: String = sim.event["options"][0]["perk"]
+	_check(Perks.is_curse(curse), "the altar only offers curses")
+	sim.choose_event(0)
+	_check(int(sim.levels[curse]) == 1 and sim.state == GameSim.State.AIM, "taking a curse moves on")
+
+	sim = _route_sim()
+	sim.choose_upgrade("split")
+	sim.route_options = ["merchant", "battle"] as Array[String]
+	sim.choose_route("merchant")
+	_check(sim.event["kind"] == "merchant", "the merchant opens")
+	sim.coins = 0
+	var goods: int = (sim.event["options"] as Array).size()
+	_check(not sim.choose_event(0), "the merchant will not give things away")
+	sim.coins = 1000000
+	_check(sim.choose_event(0) and sim.coins < 1000000 and (sim.event["options"] as Array).size() == goods - 1, "buying spends coins and stays open")
+	sim.leave_event()
+	_check(sim.state == GameSim.State.AIM, "leaving the merchant moves on")
+
+	sim = _route_sim()
+	sim.choose_upgrade("split")
+	sim.route_options = ["treasure", "battle"] as Array[String]
+	var coins_before := sim.coins
+	sim.choose_route("treasure")
+	_check(sim.coins > coins_before and sim.event["kind"] == "relic", "the treasure room gives coins and a relic choice")
+	sim.choose_event(0)
+	_check(sim.relics.size() == 1, "a chosen relic is kept")
+
+	for kind in RunContent.SHRINES:
+		var shrine := _route_sim()
+		shrine.choose_upgrade("split")
+		shrine.coins = 100
+		shrine.event = {"kind": "shrine", "shrine": kind, "options": [{"shrine": kind, "choice": "a"}]}
+		shrine.state = GameSim.State.EVENT
+		_check(shrine.choose_event(0) and shrine.state == GameSim.State.AIM, "the %s shrine resolves" % kind)
+
+	var routes_seen := {}
+	for seed_value in 40:
+		var r := _route_sim(seed_value)
+		for id in r._roll_routes():
+			routes_seen[id] = true
+	_check(routes_seen.size() == RunContent.ROUTES.size(), "every road can appear")
+	var boss_clear := _sim(1, {"routes": true})
+	boss_clear.stage = 3
+	boss_clear._start_stage()
+	boss_clear._clear_stage()
+	_check(boss_clear.relics.size() == 1, "beating a boss earns a relic")
+
+
+func _test_run_content() -> void:
+	var sim := _sim()
+	for id: String in RunContent.RELICS:
+		sim.take_relic(id)
+	_check(sim.relics.size() == RunContent.MAX_RELICS, "relics stop at their limit")
+	var before := _sim()
+	var with_relic := _sim()
+	with_relic.take_relic("r_lens")
+	_check(with_relic.stat("crit_chance") > before.stat("crit_chance"), "a relic changes the run")
+	var text_ok := true
+	for lang in I18n.LANGS:
+		for table_prefix: Array in [[RunContent.RELICS, "relic_"], [RunContent.PILOTS, "pilot_"], [RunContent.CONTRACTS, "contract_"]]:
+			for id: String in table_prefix[0]:
+				text_ok = text_ok and I18n.TEXT[lang].has(table_prefix[1] + id) and I18n.TEXT[lang].has(table_prefix[1] + id + "_desc")
+		for id: String in RunContent.MISSIONS:
+			text_ok = text_ok and I18n.TEXT[lang].has("mission_" + id)
+		for id: String in RunContent.ROUTES:
+			text_ok = text_ok and I18n.TEXT[lang].has("route_" + id) and I18n.TEXT[lang].has("route_%s_desc" % id)
+	_check(text_ok, "all run content has text")
+	var contract := _sim(1, {"contract": "few_balls"})
+	_check(contract.ball_count == _sim().ball_count - 3 and contract.stat("coin_pct") > 0.0, "a contract trades difficulty for coins")
+	var no_reroll := _sim(1, {"contract": "no_reroll", "shop": {"reroll": 2}})
+	_check(no_reroll.rerolls == 0, "a contract can forbid rerolls without going negative")
+	var pilot := _sim(1, {"pilot": "gunner"})
+	_check(pilot.stat("launch_speed") > 0.0, "a pilot changes the run")
+	var save := SaveData.new(_temp_save_path("pilot"))
+	save.cycle_pilot()
+	_check(save.pilot == "rookie", "locked pilots are skipped")
+	save.achievements["runs_3"] = true
+	save.cycle_pilot()
+	_check(save.pilot == "gunner", "an unlocked pilot can be chosen")
+	var unlocks_ok := true
+	var achievement_ids := {}
+	for entry in Achievements.all():
+		achievement_ids[entry["id"]] = true
+	for id: String in RunContent.PILOTS:
+		var unlock := String(RunContent.PILOTS[id]["unlock"])
+		unlocks_ok = unlocks_ok and (unlock == "" or achievement_ids.has(unlock))
+	_check(unlocks_ok, "pilot unlocks point at real achievements")
+	var mission_sim := _sim(1, {"missions": true})
+	_check(mission_sim.missions.size() == RunContent.MISSIONS_PER_RUN, "a run starts with its missions")
+	var mission: Dictionary = mission_sim.missions[0]
+	mission_sim.counters[mission["stat"]] = int(mission["target"])
+	var coins_before := mission_sim.coins
+	mission_sim._check_missions()
+	_check(mission["done"] and mission_sim.coins > coins_before, "finishing a mission pays out")
+	var paid := mission_sim.coins
+	mission_sim._check_missions()
+	_check(mission_sim.coins == paid, "a mission pays only once")
+	var pal := _sim()
+	_single_block(pal, Vector2i(3, 2), 100000)
+	_give(pal, "companion", 3)
+	for i in GameSim.COMPANION_HITS:
+		pal._damage_block(Vector2i(3, 2), 1.0)
+	_check(pal.total_damage > GameSim.COMPANION_HITS, "the companion strikes on its own")
+	_check(not sim._is_perk_available("c_berserk"), "curses never appear in normal offers")
+	var fused := _sim()
+	fused.levels["e_cluster"] = 1
+	_check(not fused._is_perk_available("u_cataclysm"), "an ultimate needs both evolutions")
+	fused.levels["e_inferno"] = 1
+	_check(fused._is_perk_available("u_cataclysm"), "two evolutions open their ultimate")
 
 
 func _test_next_unlock() -> void:

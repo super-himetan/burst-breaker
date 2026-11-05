@@ -81,6 +81,13 @@ func _play(config: Dictionary, seed_value: int, given := "", build := "") -> Dic
 				for id in sim.choices:
 					seen[id] = true
 				sim.choose_upgrade(_pick(sim, rng, build))
+			GameSim.State.ROUTE:
+				picks += 1
+				sim.choose_route(sim.route_options[rng.randi_range(0, sim.route_options.size() - 1)])
+			GameSim.State.EVENT:
+				picks += 1
+				if not sim.choose_event(0):
+					sim.leave_event()
 			_:
 				break
 	return {

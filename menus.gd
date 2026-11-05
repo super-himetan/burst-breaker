@@ -160,7 +160,9 @@ func buttons(screen: int) -> Array[Dictionary]:
 			if save.max_tier() > 0:
 				list.append(_button("tier_down", Rect2(50.0, 660.0, 100.0, 80.0), "<", "normal" if save.tier > 0 else "disabled"))
 				list.append(_button("tier_up", Rect2(570.0, 660.0, 100.0, 80.0), ">", "normal" if save.tier < save.max_tier() else "disabled"))
-			list.append(_button("go", Rect2(90.0, 990.0, 540.0, 120.0), t("go"), "primary"))
+			list.append(_button("pilot", Rect2(50.0, 866.0, 305.0, 84.0), t("pilot_" + String(save.pilot))))
+			list.append(_button("contract", Rect2(365.0, 866.0, 305.0, 84.0), t("contract_" + String(save.contract)), "normal" if int(save.wins) > 0 else "disabled"))
+			list.append(_button("go", Rect2(90.0, 1000.0, 540.0, 110.0), t("go"), "primary"))
 			list.append(_button("back", Rect2(180.0, 1128.0, 360.0, 84.0), t("back")))
 		Screen.SHOP:
 			list.append(_button("buy_all", Rect2(60.0, 1120.0, 290.0, 92.0), t("buy_all"), "normal" if save.cheapest_item() != "" else "disabled"))
@@ -223,6 +225,13 @@ func press(id: String) -> bool:
 		scroll = 0.0
 		return true
 	match id:
+		"pilot":
+			save.cycle_pilot()
+			save.save_file()
+		"contract":
+			if int(save.wins) > 0:
+				save.cycle_contract()
+				save.save_file()
 		"tier_up", "tier_down":
 			save.set_tier(int(save.tier) + (1 if id == "tier_up" else -1))
 			save.save_file()
@@ -515,20 +524,22 @@ func _draw_loadout() -> void:
 	var tier: int = save.tier
 	var label := t("tier_label") % tier
 	host.text_center(Vector2(BASE_W / 2.0, 700.0), label, 42, UI.ACCENT if tier > 0 else UI.TEXT)
+	var picks := "%s  /  %s" % [t("pilot_%s_desc" % String(save.pilot)), t("contract_%s_desc" % String(save.contract))]
+	host.text_center(Vector2(BASE_W / 2.0, 974.0), picks, host.fit_size(picks, 22, 640.0), UI.GOLD, host.font_body)
 	if tier == 0:
 		host.text_center(Vector2(BASE_W / 2.0, 790.0), t("tier_base"), 26, UI.MUTED, host.font_body)
 		return
 	var hp_text := t("tier_hp") % _scale_text(Tiers.hp_scale(tier))
 	var coin_text := t("tier_coins") % _scale_text(Tiers.coin_scale(tier))
-	host.text_center(Vector2(BASE_W / 2.0, 775.0), "%s    %s" % [hp_text, coin_text], 26, UI.GOLD)
+	host.text_center(Vector2(BASE_W / 2.0, 770.0), "%s    %s" % [hp_text, coin_text], 26, UI.GOLD)
 	# Space for the newest rules; older ones keep applying.
 	var active: Array[String] = []
 	for i in mini(tier, Tiers.RULES.size()):
 		active.append(Tiers.RULES[i])
-	var shown := active.slice(maxi(active.size() - 4, 0))
+	var shown := active.slice(maxi(active.size() - 1, 0))
 	for i in shown.size():
 		var line := t("tier_rule_" + shown[i])
-		host.text_center(Vector2(BASE_W / 2.0, 825.0 + i * 36.0), line, host.fit_size(line, 24, 640.0), UI.MUTED, host.font_body)
+		host.text_center(Vector2(BASE_W / 2.0, 815.0 + i * 36.0), line, host.fit_size(line, 22, 640.0), UI.MUTED, host.font_body)
 
 
 func _draw_mastery(y: float) -> void:
