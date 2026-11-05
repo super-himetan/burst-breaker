@@ -45,6 +45,10 @@ const OVERKILL_TEXT_GAP := 0.12
 const CARD_ICON_MAX := 120.0
 const KIND_BORDER := 4
 const CARD_PATH_WIDTH := 96.0
+const OBSTACLE_BODY := Color("2a2845")
+const OBSTACLE_EDGE := Color("6f6b9c")
+const OBSTACLE_PORTAL := Color("c77dff")
+const OBSTACLE_PULSE_DECAY := 6.0
 const BUILD_TILE := 54.0
 const BUILD_GAP := 8.0
 const STAGE_PIP_SPACING := 26.0
@@ -156,6 +160,7 @@ var music_player: AudioStreamPlayer
 var music_task := -1
 var music_pcm := PackedByteArray()
 var end_age := 0.0
+var last_bumper_sound := 0.0
 var last_tick_sound := 0.0
 var last_overkill_text := 0.0
 var run_mastery_before := 0
@@ -616,7 +621,8 @@ func _last_target() -> Variant:
 	if sim.boss_block != null:
 		var boss: Dictionary = sim.boss_block
 		return boss if float(boss["hp"]) / float(boss["max_hp"]) <= TENSION_BOSS_HP else null
-	if sim.blocks.size() == 1:
+	# A big block covers several cells but is still only one target.
+	if sim.blocks.size() <= 4 and sim.unique_blocks().size() == 1:
 		return sim.blocks.values()[0]
 	return null
 
@@ -1072,6 +1078,14 @@ func _consume_events() -> void:
 				_spawn_particles(e["pos"], UI.BLOCKS["regen"], 3, 90.0)
 			"breed":
 				_spawn_particles(e["pos"], UI.BLOCKS["breeder"], 8, 180.0)
+			"bumper":
+				_spawn_particles(e["pos"], UI.STAR, 8, 320.0)
+				if time - last_bumper_sound > 0.05:
+					last_bumper_sound = time
+					_play("pick", randf_range(1.5, 1.8))
+			"portal":
+				_spawn_particles(e["from"], OBSTACLE_PORTAL, 6, 220.0)
+				_spawn_particles(e["to"], OBSTACLE_PORTAL, 6, 220.0)
 			"plague":
 				_spawn_particles(e["pos"], Color("2f9e44"), 6, 200.0)
 			"extra_ball":
@@ -1251,6 +1265,8 @@ func _spawn_particles(pos: Vector2, color: Color, count: int, speed: float) -> v
 func _update_fx(delta: float) -> void:
 	trauma = maxf(trauma - delta * 2.2, 0.0)
 	descend_anim = maxf(descend_anim - delta * 6.0, 0.0)
+	for entry: Dictionary in sim.obstacles.values():
+		entry["pulse"] = maxf(float(entry["pulse"]) - delta * OBSTACLE_PULSE_DECAY, 0.0)
 	banner_time = maxf(banner_time - delta, 0.0)
 	combo_pop = maxf(combo_pop - delta * 8.0, 0.0)
 	coin_pop = maxf(coin_pop - delta * 7.0, 0.0)
@@ -1329,6 +1345,7 @@ func _draw() -> void:
 	panel(field, Color(0.04, 0.03, 0.1, 0.42), 26.0, UI.LINE, 2)
 	_draw_danger_line()
 	_draw_laser_warning()
+	_draw_obstacles()
 	_draw_blocks()
 	_draw_boss_down()
 	_draw_balls()
@@ -1696,6 +1713,45 @@ func _draw_burst_cut_in() -> void:
 	text_center(Vector2(BASE_W / 2.0 + slide - creep, center_y + 18.0), name_text, fit_size(name_text, 96, 650.0), UI.INK)
 
 
+## Furniture is dark and flat, so it never reads as something to break.
+func _draw_obstacles() -> void:
+	for entry: Dictionary in sim.obstacles.values():
+		_draw_obstacle(String(entry["kind"]), sim.cell_rect(entry["cell"]), float(entry["pulse"]), int(entry["dir"]))
+
+
+func _draw_obstacle(kind: String, rect: Rect2, pulse: float, dir := 1) -> void:
+	var edge := OBSTACLE_EDGE.lerp(Color.WHITE, pulse)
+	var c := rect.get_center()
+	match kind:
+		"bumper":
+			var r := GameSim.BUMPER_RADIUS + pulse * 7.0
+			soft_glow(c, Vector2.ONE * (r * 3.0), Color(UI.STAR, 0.18 + pulse * 0.5))
+			canvas.draw_circle(c, r, OBSTACLE_BODY)
+			canvas.draw_arc(c, r, 0.0, TAU, 32, UI.STAR.lerp(Color.WHITE, pulse), 4.0, true)
+			canvas.draw_circle(c, r * 0.36, UI.STAR.lerp(Color.WHITE, pulse))
+		"ramp_l", "ramp_r":
+			var points := sim.shape_points(rect, "slope_l" if kind == "ramp_l" else "slope_r")
+			canvas.draw_colored_polygon(points, OBSTACLE_BODY)
+			points.append(points[0])
+			canvas.draw_polyline(points, edge, 3.0, true)
+		"portal":
+			var spin := time * 3.0
+			soft_glow(c, Vector2.ONE * 110.0, Color(OBSTACLE_PORTAL, 0.4))
+			canvas.draw_circle(c, GameSim.PORTAL_RADIUS, Color(UI.INK, 0.9))
+			for i in 3:
+				canvas.draw_arc(c, GameSim.PORTAL_RADIUS - i * 6.0, spin * (1.0 + i * 0.4) + i, spin * (1.0 + i * 0.4) + i + 4.2, 20, OBSTACLE_PORTAL, 3.0, true)
+		_:
+			panel(rect, OBSTACLE_BODY, 8.0, edge, 3)
+			if kind == "mover":
+				var sign_x := float(dir)
+				for i in 2:
+					var tip := c + Vector2(sign_x * (4.0 + i * 16.0), 0.0)
+					canvas.draw_polyline(PackedVector2Array([tip + Vector2(-sign_x * 10.0, -10.0), tip, tip + Vector2(-sign_x * 10.0, 10.0)]), edge, 3.0, true)
+			else:
+				for corner_at in [rect.position + Vector2(10.0, 10.0), rect.end - Vector2(10.0, 10.0), Vector2(rect.end.x - 10.0, rect.position.y + 10.0), Vector2(rect.position.x + 10.0, rect.end.y - 10.0)]:
+					canvas.draw_circle(corner_at, 3.0, edge)
+
+
 func _draw_blocks() -> void:
 	var slide := -descend_anim * GameSim.CELL_H
 	for block in sim.unique_blocks():
@@ -1710,24 +1766,38 @@ func _draw_blocks() -> void:
 		var hit: float = clampf(float(flash.get(block["id"], 0.0)), 0.0, 1.0)
 		# A struck block swells for a moment, so every hit has weight.
 		var drawn := rect.grow(hit * 3.0)
-		_draw_block_body(kind, drawn, _block_color(block), _block_border(block))
+		var shape: String = block.get("shape", "box")
+		var body := _block_color(block).lerp(Color.WHITE, hit * 0.85)
+		_draw_block_body(kind, drawn, body, _block_border(block), shape)
 		if block.has("post"):
-			panel(drawn, Color.TRANSPARENT, 14.0, Color("8be9fd"), 3)
-		if hit > 0.0:
-			panel(drawn, Color(1.0, 1.0, 1.0, hit * 0.85), 14.0)
+			_draw_block_outline(drawn, shape, Color("8be9fd"), 3.0)
 		if int(block["poison"]) > 0:
-			canvas.draw_circle(rect.position + Vector2(rect.size.x - 11.0, 12.0), 5.0, Color("2f9e44"))
+			canvas.draw_circle(rect.get_center() + Vector2(-9.0, -rect.size.y * 0.22), 5.0, Color("2f9e44"))
 		if block["burning"]:
-			canvas.draw_circle(rect.position + Vector2(rect.size.x - 11.0, rect.size.y - 12.0), 5.0, Color("e8590c"))
+			canvas.draw_circle(rect.get_center() + Vector2(9.0, -rect.size.y * 0.22), 5.0, Color("e8590c"))
 
 
 ## Base look of a block, shared with the codex. The body's colour belongs to its health,
 ## so a block's kind has to read from its border and its centre icon.
-func _draw_block_body(kind: String, rect: Rect2, color: Color, border := Color.TRANSPARENT) -> void:
-	panel(rect, color, 14.0)
-	panel(Rect2(rect.position + Vector2(4.0, 3.0), Vector2(rect.size.x - 8.0, rect.size.y * 0.4)), Color(1.0, 1.0, 1.0, 0.2), 10.0)
+func _draw_block_body(kind: String, rect: Rect2, color: Color, border := Color.TRANSPARENT, shape := "box") -> void:
+	if shape == "box":
+		panel(rect, color, 14.0)
+		panel(Rect2(rect.position + Vector2(4.0, 3.0), Vector2(rect.size.x - 8.0, rect.size.y * 0.4)), Color(1.0, 1.0, 1.0, 0.2), 10.0)
+	elif shape == "round":
+		var radius := minf(rect.size.x, rect.size.y) / 2.0
+		canvas.draw_circle(rect.get_center(), radius, color)
+		canvas.draw_circle(rect.get_center() + Vector2(-radius * 0.26, -radius * 0.3), radius * 0.42, Color(1.0, 1.0, 1.0, 0.22))
+	else:
+		var points := sim.shape_points(rect, shape)
+		canvas.draw_colored_polygon(points, color)
+		# A lighter inner copy, nudged upward, gives every shape the same soft bevel.
+		var center := rect.get_center()
+		var inner := PackedVector2Array()
+		for p in points:
+			inner.append(center + (p - center) * 0.62 + Vector2(0.0, -rect.size.y * 0.06))
+		canvas.draw_colored_polygon(inner, Color(1.0, 1.0, 1.0, 0.16))
 	if border.a > 0.0:
-		panel(rect, Color.TRANSPARENT, 14.0, border, KIND_BORDER)
+		_draw_block_outline(rect, shape, border, float(KIND_BORDER))
 	var c := rect.get_center()
 	match kind:
 		"bomb":
@@ -1752,9 +1822,29 @@ func _draw_block_body(kind: String, rect: Rect2, color: Color, border := Color.T
 			canvas.draw_circle(c, 8.0, Color.WHITE)
 
 
+func _draw_block_outline(rect: Rect2, shape: String, color: Color, width: float) -> void:
+	if shape == "box":
+		panel(rect, Color.TRANSPARENT, 14.0, color, int(width))
+	elif shape == "round":
+		canvas.draw_arc(rect.get_center(), minf(rect.size.x, rect.size.y) / 2.0, 0.0, TAU, 32, color, width, true)
+	else:
+		var points := sim.shape_points(rect, shape)
+		points.append(points[0])
+		canvas.draw_polyline(points, color, width, true)
+
+
 func draw_block_icon(kind: String, rect: Rect2) -> void:
 	if kind == "boss":
 		BossArt.draw(canvas, "purun", rect, "idle", time)
+		return
+	if kind in ["wall", "mover", "bumper", "ramp_l", "portal"]:
+		_draw_obstacle(kind, rect, 0.0)
+		return
+	if kind in ["round", "hex", "diamond", "tri_up", "pill"]:
+		_draw_block_body("normal", rect, UI.RAMP[1], Color.TRANSPARENT, kind)
+		return
+	if kind == "big":
+		_draw_block_body("normal", rect.grow(4.0), UI.RAMP[3])
 		return
 	_draw_block_body(kind, rect, UI.RAMP[1], UI.BLOCKS.get(kind, Color.TRANSPARENT))
 
@@ -1786,7 +1876,8 @@ func _draw_boss(block: Dictionary, rect: Rect2) -> void:
 
 ## Colour is the health readout: the hotter the block, the more it still takes to break.
 func _block_color(block: Dictionary) -> Color:
-	var top: float = float(GameSim.STAGES[sim.stage]["hp_max"]) * GameSim.Tiers.hp_scale(sim.tier)
+	var size: Vector2i = block["size"]
+	var top: float = float(GameSim.STAGES[sim.stage]["hp_max"]) * GameSim.Tiers.hp_scale(sim.tier) * size.x * size.y
 	return UI.ramp(float(block["hp"]) / top)
 
 

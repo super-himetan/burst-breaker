@@ -7,6 +7,8 @@ const Shop := preload("res://data/shop.gd")
 const StarTree := preload("res://data/star_tree.gd")
 const Tiers := preload("res://data/tiers.gd")
 const Bosses := preload("res://data/bosses.gd")
+const Layouts := preload("res://data/layouts.gd")
+const Formations := preload("res://data/formations.gd")
 
 enum State { AIM, SHOOT, UPGRADE, WON, LOST }
 
@@ -62,6 +64,11 @@ const STAGES := [
 ]
 
 const BOSS_SIZE := Vector2i(3, 2)
+const BUMPER_RADIUS := 26.0
+const PORTAL_RADIUS := 24.0
+const PORTAL_COOLDOWN := 0.25
+## How far a rounded polygon's edge bends in from its cell, as a share of the cell.
+const PILL_SEGMENTS := 6
 const BOSS_STAGE_EXTRA_PICKS := 1
 const SLIME_STEP := 0.25
 const SLIME_PIECES := 3
@@ -106,12 +113,16 @@ class Ball:
 	var hits := 0
 	var ignore_id := -1
 	var ignore_t := 0.0
+	var portal_t := 0.0
 
 
 var state: int = State.AIM
 var stage := 0
 var waves_left := 0
 var blocks := {}
+## Unbreakable pieces by cell: {kind, cell, partner, dir, pulse}. They never count toward a clear.
+var obstacles := {}
+var _formation_rows: Array[Dictionary] = []
 var balls: Array[Ball] = []
 var levels := {}
 var stats := {}
@@ -474,7 +485,7 @@ func trace_aim(dir: Vector2, max_len := 1000.0) -> PackedVector2Array:
 		if p.y < FIELD_Y + ball_radius:
 			d.y = -d.y
 			points.append(p)
-		if _cell_at_circle(p, -1) != NO_CELL:
+		if _cell_at_circle(p, -1) != NO_CELL or _obstacle_touches(p):
 			break
 	points.append(p)
 	return points
@@ -528,18 +539,41 @@ func _start_stage() -> void:
 	balls = []
 	boss_block = null
 	bonus_balls = 0
+	_build_obstacles()
 	_pending_blasts = []
 	_launch_left = 0
 	var cfg: Dictionary = STAGES[stage]
 	waves_left = maxi(int(cfg["waves"]) + int(stat("wave_delta")), 0) if not cfg.has("boss") else 0
+	var first_rows := int(cfg["rows"])
+	_formation_rows = Formations.queue_for(first_rows + waves_left, _rng)
+	# The bottom of the picture goes in first, with the rest following it down as waves.
+	var top := BOSS_SIZE.y + 1 if cfg.has("boss") else 0
 	if cfg.has("boss"):
 		_spawn_boss(cfg["boss"])
-		for row in int(cfg["rows"]):
-			_spawn_row(row + BOSS_SIZE.y + 1)
-	else:
-		for row in int(cfg["rows"]):
-			_spawn_row(row)
+	for i in first_rows:
+		_spawn_row(top + first_rows - 1 - i)
 	_emit({"type": "stage_start", "stage": stage, "boss": cfg.has("boss"), "boss_id": boss_id()})
+
+
+func _build_obstacles() -> void:
+	obstacles = {}
+	var layouts := Layouts.for_stage(stage)
+	if layouts.is_empty():
+		return
+	var layout: Array = layouts[_rng.randi_range(0, layouts.size() - 1)]
+	if _rng.randf() < 0.5:
+		layout = Layouts.mirrored(layout)
+	var portal: Variant = null
+	for piece: Array in layout:
+		var cell := Vector2i(piece[1], piece[2])
+		var entry := {"kind": piece[0], "cell": cell, "dir": 1 if _rng.randf() < 0.5 else -1, "pulse": 0.0}
+		obstacles[cell] = entry
+		if piece[0] == "portal":
+			if portal == null:
+				portal = entry
+			else:
+				entry["partner"] = portal["cell"]
+				portal["partner"] = cell
 
 
 func _block_hp(base: float) -> int:
@@ -558,6 +592,7 @@ func _new_block(hp: int, kind: String, origin: Vector2i, size := Vector2i.ONE) -
 		"poison": 0,
 		"burning": false,
 		"slid": true,
+		"shape": "box",
 	}
 	_next_block_id += 1
 	return block
@@ -606,27 +641,64 @@ func _spawn_boss(cfg: Dictionary) -> void:
 
 
 func _spawn_row(row: int) -> void:
+	if _formation_rows.is_empty():
+		_formation_rows = Formations.queue_for(1, _rng)
+	var entry: Dictionary = _formation_rows.pop_front()
 	var cfg: Dictionary = STAGES[stage]
-	var placed := 0
+	var pattern: String = entry["row"]
+	var kinds := {}
 	for col in COLS:
-		if _rng.randf() > float(cfg["density"]):
+		var letter := pattern[col]
+		if letter == "." or letter == "+":
 			continue
-		if _place_block(Vector2i(col, row)):
-			placed += 1
-	if placed == 0:
-		_place_block(Vector2i(_rng.randi_range(0, COLS - 1), row))
+		var size := Formations.size_of(letter)
+		# A picture's left half decides, and the right half copies it.
+		var mirror := mini(col, COLS - 1 - col)
+		if size == Vector2i.ONE and not kinds.has(mirror):
+			kinds[mirror] = _roll_block_kind(cfg["specials"])
+		var kind: String = kinds[mirror] if size == Vector2i.ONE else "normal"
+		_place_formation_block(Vector2i(col, row), size, kind, entry, cfg)
 
 
-func _place_block(cell: Vector2i) -> bool:
-	if blocks.has(cell):
-		return false
-	var cfg: Dictionary = STAGES[stage]
-	var hp := _block_hp(_rng.randf_range(float(cfg["hp_min"]), float(cfg["hp_max"])))
-	var kind := _roll_block_kind(cfg["specials"])
+## `origin` is the cell a pattern letter sits on, and a tall block grows upward from the row
+## it arrived on, since rows above it have not come down yet.
+func _place_formation_block(cell: Vector2i, size: Vector2i, kind: String, entry: Dictionary, cfg: Dictionary) -> void:
+	var origin := Vector2i(cell.x, maxi(cell.y - size.y + 1, 0))
+	for y in size.y:
+		for x in size.x:
+			var covered := origin + Vector2i(x, y)
+			if covered.x >= COLS or blocks.has(covered) or obstacles.has(covered):
+				return
+	var strength := Formations.toughness(cell.x + (size.x - 1) / 2.0, int(entry["index"]), int(entry["height"]), int(entry["mode"]))
+	var hp := _block_hp(lerpf(float(cfg["hp_min"]), float(cfg["hp_max"]), strength) * size.x * size.y)
 	if kind == "treasure" or kind == "extra_ball":
 		hp = maxi(hp / 2, 1)
 	if kind == "shield":
 		# Shields ignore damage size, so they count hits instead of absorbing HP.
+		hp = 3 + (mini(cell.x, COLS - 1 - cell.x) + cell.y) % 4 + stage
+	var block := _new_block(hp, kind, origin, size)
+	block["shape"] = _shape_at(entry["shape"], cell)
+	for y in size.y:
+		for x in size.x:
+			blocks[origin + Vector2i(x, y)] = block
+
+
+func _shape_at(shape: String, cell: Vector2i) -> String:
+	if shape != "tri":
+		return shape
+	return "tri_up" if (cell.x + cell.y) % 2 == 0 else "tri_down"
+
+
+## A lone block for a boss to summon, outside any formation.
+func _place_block(cell: Vector2i) -> bool:
+	if blocks.has(cell) or obstacles.has(cell):
+		return false
+	var cfg: Dictionary = STAGES[stage]
+	var kind := _roll_block_kind(cfg["specials"])
+	var hp := _block_hp(_rng.randf_range(float(cfg["hp_min"]), float(cfg["hp_max"])))
+	if kind == "treasure" or kind == "extra_ball":
+		hp = maxi(hp / 2, 1)
+	if kind == "shield":
 		hp = _rng.randi_range(3, 6) + stage
 	blocks[cell] = _new_block(hp, kind, cell)
 	return true
@@ -706,6 +778,7 @@ func _move_ball(ball: Ball, dt: float) -> bool:
 		ball.ignore_t -= dt
 		if ball.ignore_t <= 0.0:
 			ball.ignore_id = -1
+	ball.portal_t = maxf(ball.portal_t - dt, 0.0)
 	var left := FIELD_X + ball_radius
 	var right := FIELD_X + FIELD_W - ball_radius
 	var top := FIELD_Y + ball_radius
@@ -728,6 +801,7 @@ func _move_ball(ball: Ball, dt: float) -> bool:
 			_next_launch_x = clampf(ball.pos.x, FIELD_X + BALL_RADIUS, FIELD_X + FIELD_W - BALL_RADIUS)
 		return true
 	if not ball.returning:
+		_collide_obstacles(ball)
 		_collide_ball(ball)
 		# Keep balls from skating sideways forever.
 		if absf(ball.vel.y) < ball_speed * 0.12:
@@ -794,9 +868,145 @@ func _cell_at_circle(p: Vector2, ignore_id: int, radius := -1.0) -> Vector2i:
 				continue
 			var rect := block_rect(block)
 			var nearest := Vector2(clampf(p.x, rect.position.x, rect.end.x), clampf(p.y, rect.position.y, rect.end.y))
-			if p.distance_squared_to(nearest) <= r * r:
+			if p.distance_squared_to(nearest) > r * r:
+				continue
+			if block.get("shape", "box") == "box" or not _shape_contact(block, p, r).is_empty():
 				return cell
 	return NO_CELL
+
+
+## Where a circle touches a non-box block: {nearest, normal}, or empty when it misses.
+func _shape_contact(block: Dictionary, p: Vector2, r: float) -> Dictionary:
+	var rect := block_rect(block)
+	if block["shape"] == "round":
+		return _circle_contact(rect.get_center(), minf(rect.size.x, rect.size.y) / 2.0, p, r)
+	return _polygon_contact(shape_points(rect, block["shape"]), p, r)
+
+
+## The outline of a shape inside its rectangle, shared by collisions and drawing.
+func shape_points(rect: Rect2, shape: String) -> PackedVector2Array:
+	var l := rect.position.x
+	var t := rect.position.y
+	var r := rect.end.x
+	var b := rect.end.y
+	var cx := rect.get_center().x
+	var cy := rect.get_center().y
+	match shape:
+		"diamond":
+			return PackedVector2Array([Vector2(cx, t), Vector2(r, cy), Vector2(cx, b), Vector2(l, cy)])
+		"hex":
+			var inset := rect.size.x * 0.22
+			return PackedVector2Array([Vector2(l + inset, t), Vector2(r - inset, t), Vector2(r, cy), Vector2(r - inset, b), Vector2(l + inset, b), Vector2(l, cy)])
+		"tri_up":
+			return PackedVector2Array([Vector2(cx, t), Vector2(r, b), Vector2(l, b)])
+		"tri_down", "slope_flat":
+			return PackedVector2Array([Vector2(l, t), Vector2(r, t), Vector2(cx, b)])
+		"slope_l":
+			return PackedVector2Array([rect.position, Vector2(r, t), Vector2(l, b)])
+		"slope_r":
+			return PackedVector2Array([rect.position, Vector2(r, t), rect.end])
+		"pill":
+			var points := PackedVector2Array()
+			var radius := rect.size.y / 2.0
+			for i in PILL_SEGMENTS + 1:
+				points.append(Vector2(r - radius, cy) + Vector2.from_angle(-PI / 2.0 + PI * i / PILL_SEGMENTS) * radius)
+			for i in PILL_SEGMENTS + 1:
+				points.append(Vector2(l + radius, cy) + Vector2.from_angle(PI / 2.0 + PI * i / PILL_SEGMENTS) * radius)
+			return points
+	return PackedVector2Array([rect.position, Vector2(r, t), rect.end, Vector2(l, b)])
+
+
+func _circle_contact(center: Vector2, radius: float, p: Vector2, r: float) -> Dictionary:
+	var away := p - center
+	if away.length() > radius + r:
+		return {}
+	var normal := away.normalized() if away.length_squared() > 0.0001 else Vector2.DOWN
+	return {"nearest": center + normal * radius, "normal": normal}
+
+
+func _polygon_contact(points: PackedVector2Array, p: Vector2, r: float) -> Dictionary:
+	var best := Vector2.ZERO
+	var best_d := INF
+	for i in points.size():
+		var on_edge := Geometry2D.get_closest_point_to_segment(p, points[i], points[(i + 1) % points.size()])
+		var d := p.distance_squared_to(on_edge)
+		if d < best_d:
+			best_d = d
+			best = on_edge
+	var inside := Geometry2D.is_point_in_polygon(p, points)
+	if not inside and best_d > r * r:
+		return {}
+	var normal := (best - p if inside else p - best)
+	normal = normal.normalized() if normal.length_squared() > 0.0001 else Vector2.DOWN
+	return {"nearest": best, "normal": normal}
+
+
+func _obstacle_near(p: Vector2) -> Array:
+	var found := []
+	var col := int(floor((p.x - FIELD_X) / CELL_W))
+	var row := int(floor((p.y - FIELD_Y) / CELL_H))
+	for y in range(row - 1, row + 2):
+		for x in range(col - 1, col + 2):
+			if obstacles.has(Vector2i(x, y)):
+				found.append(obstacles[Vector2i(x, y)])
+	return found
+
+
+## Solid pieces stop the aiming line. Portals are holes, so it passes over them.
+func _obstacle_touches(p: Vector2) -> bool:
+	for entry: Dictionary in _obstacle_near(p):
+		if entry["kind"] != "portal" and not _obstacle_contact(entry, p).is_empty():
+			return true
+	return false
+
+
+func _obstacle_contact(entry: Dictionary, p: Vector2) -> Dictionary:
+	var rect := cell_rect(entry["cell"])
+	match String(entry["kind"]):
+		"bumper":
+			return _circle_contact(rect.get_center(), BUMPER_RADIUS, p, ball_radius)
+		"ramp_l":
+			return _polygon_contact(shape_points(rect, "slope_l"), p, ball_radius)
+		"ramp_r":
+			return _polygon_contact(shape_points(rect, "slope_r"), p, ball_radius)
+	var nearest := Vector2(clampf(p.x, rect.position.x, rect.end.x), clampf(p.y, rect.position.y, rect.end.y))
+	if p.distance_squared_to(nearest) > ball_radius * ball_radius:
+		return {}
+	var normal := p - nearest
+	if normal.length_squared() < 0.0001:
+		normal = Vector2.DOWN
+	# Snap to an axis, like a block, so walls bounce the way they look.
+	normal = Vector2(signf(normal.x), 0.0) if absf(normal.x) > absf(normal.y) else Vector2(0.0, signf(normal.y))
+	return {"nearest": nearest, "normal": normal}
+
+
+func _collide_obstacles(ball: Ball) -> void:
+	for entry: Dictionary in _obstacle_near(ball.pos):
+		if entry["kind"] == "portal":
+			_try_portal(ball, entry)
+			continue
+		var contact := _obstacle_contact(entry, ball.pos)
+		if contact.is_empty() or ball.vel.dot(contact["normal"]) >= 0.0:
+			continue
+		ball.vel = ball.vel.bounce(contact["normal"])
+		ball.pos = contact["nearest"] + (contact["normal"] as Vector2) * (ball_radius + 0.5)
+		entry["pulse"] = 1.0
+		# Every surface counts as a wall, so bounce builds get to enjoy these too.
+		_on_wall(ball, false)
+		if entry["kind"] == "bumper":
+			_emit({"type": "bumper", "pos": cell_rect(entry["cell"]).get_center()})
+
+
+func _try_portal(ball: Ball, entry: Dictionary) -> void:
+	if ball.portal_t > 0.0 or not entry.has("partner"):
+		return
+	var center := cell_rect(entry["cell"]).get_center()
+	if ball.pos.distance_to(center) > PORTAL_RADIUS:
+		return
+	var exit_at := cell_rect(entry["partner"]).get_center()
+	_emit({"type": "portal", "from": center, "to": exit_at})
+	ball.pos = exit_at
+	ball.portal_t = PORTAL_COOLDOWN
 
 
 func _collide_ball(ball: Ball) -> void:
@@ -812,14 +1022,19 @@ func _collide_ball(ball: Ball) -> void:
 		var rect := block_rect(block)
 		var nearest := Vector2(clampf(ball.pos.x, rect.position.x, rect.end.x), clampf(ball.pos.y, rect.position.y, rect.end.y))
 		var normal := ball.pos - nearest
-		if normal.length_squared() < 0.0001:
-			normal = -ball.vel
-		normal = normal.normalized()
-		# Snap to an axis so bounces stay readable on a grid.
-		if absf(normal.x) > absf(normal.y):
-			normal = Vector2(signf(normal.x), 0.0)
+		if block.get("shape", "box") != "box":
+			var contact := _shape_contact(block, ball.pos, ball_radius)
+			nearest = contact["nearest"]
+			normal = contact["normal"]
 		else:
-			normal = Vector2(0.0, signf(normal.y))
+			if normal.length_squared() < 0.0001:
+				normal = -ball.vel
+			normal = normal.normalized()
+			# Snap to an axis so bounces stay readable on a grid.
+			if absf(normal.x) > absf(normal.y):
+				normal = Vector2(signf(normal.x), 0.0)
+			else:
+				normal = Vector2(0.0, signf(normal.y))
 		if ball.vel.dot(normal) >= 0.0:
 			return
 		ball.vel = ball.vel.bounce(normal)
@@ -1201,9 +1416,13 @@ func _apply_end_of_shot() -> void:
 			_emit({"type": "regen", "pos": block_rect(block).get_center()})
 	if stat("intercept_pct") > 0.0:
 		var lowest := _lowest_row()
+		var hit_ids := {}
 		for cell: Vector2i in blocks.keys():
 			if cell.y == lowest and blocks.has(cell) and blocks[cell]["kind"] != "boss":
-				_damage_block(cell, float(blocks[cell]["max_hp"]) * stat("intercept_pct"), {"dot": true})
+				var target_id: int = blocks[cell]["id"]
+				if not hit_ids.has(target_id):
+					hit_ids[target_id] = true
+					_damage_block(cell, float(blocks[cell]["max_hp"]) * stat("intercept_pct"), {"dot": true})
 	# Blasts started by end-of-shot damage finish now, so a shot resolves completely.
 	var guard_count := 0
 	while not _pending_blasts.is_empty() and guard_count < 500:
@@ -1222,7 +1441,7 @@ func _breed() -> void:
 		var origin: Vector2i = block["origin"]
 		for offset in [Vector2i.LEFT, Vector2i.RIGHT, Vector2i.DOWN]:
 			var target: Vector2i = origin + offset
-			if target.x >= 0 and target.x < COLS and not blocks.has(target):
+			if target.x >= 0 and target.x < COLS and not blocks.has(target) and not obstacles.has(target):
 				var hp: int = maxi(int(block["max_hp"]) / 2, 1)
 				blocks[target] = _new_block(hp, "normal", target)
 				_emit({"type": "breed", "pos": cell_rect(target).get_center()})
@@ -1260,22 +1479,28 @@ func _descend() -> void:
 			guard["origin"] = post
 			moved[post] = guard
 	# Bottom rows first, so blocks stack up against the boss instead of overlapping it.
-	var cells := blocks.keys()
-	cells.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return a.y > b.y)
-	for cell: Vector2i in cells:
-		var block: Dictionary = blocks[cell]
+	var falling := unique_blocks()
+	falling.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return int(a["origin"].y) + int(a["size"].y) > int(b["origin"].y) + int(b["size"].y))
+	for block in falling:
 		if block["kind"] == "boss" or block.has("post"):
 			continue
-		var target: Vector2i = cell + Vector2i.DOWN
-		if moved.has(target):
-			target = cell
-		if moved.has(target):
+		var origin: Vector2i = block["origin"]
+		var target := origin + Vector2i.DOWN
+		# Blocks drop past furniture rather than getting stuck on it.
+		while _covers_obstacle(target, block["size"]):
+			target += Vector2i.DOWN
+		if _covers_any(moved, target, block["size"]):
+			target = origin
+		if _covers_any(moved, target, block["size"]):
 			bites += 1
 			continue
-		block["slid"] = target != cell
+		block["slid"] = target != origin
 		block["origin"] = target
-		moved[target] = block
+		for y in int(block["size"].y):
+			for x in int(block["size"].x):
+				moved[target + Vector2i(x, y)] = block
 	blocks = moved
+	_slide_movers()
 	if waves_left > 0:
 		waves_left -= 1
 		_spawn_row(0)
@@ -1284,6 +1509,35 @@ func _descend() -> void:
 	_boss_trick()
 	_summon_if_due()
 	_emit({"type": "descend"})
+
+
+func _covers_obstacle(origin: Vector2i, size: Vector2i) -> bool:
+	return _covers_any(obstacles, origin, size)
+
+
+func _covers_any(cells: Dictionary, origin: Vector2i, size: Vector2i) -> bool:
+	for y in size.y:
+		for x in size.x:
+			if cells.has(origin + Vector2i(x, y)):
+				return true
+	return false
+
+
+## Moving walls step along their row each turn, turning back at an edge or anything in the way.
+func _slide_movers() -> void:
+	for entry: Dictionary in obstacles.values():
+		if entry["kind"] != "mover":
+			continue
+		var cell: Vector2i = entry["cell"]
+		var next := cell + Vector2i(int(entry["dir"]), 0)
+		if next.x < 0 or next.x >= COLS or obstacles.has(next) or blocks.has(next):
+			entry["dir"] = -int(entry["dir"])
+			next = cell + Vector2i(int(entry["dir"]), 0)
+			if next.x < 0 or next.x >= COLS or obstacles.has(next) or blocks.has(next):
+				continue
+		obstacles.erase(cell)
+		entry["cell"] = next
+		obstacles[next] = entry
 
 
 ## Ages the boss. Returns true when the boss should step down this turn.
@@ -1325,7 +1579,7 @@ func _minion_hp() -> int:
 
 
 func _put_block(cell: Vector2i, kind: String, hp: int) -> Variant:
-	if blocks.has(cell) or cell.x < 0 or cell.x >= COLS or cell.y < 0:
+	if blocks.has(cell) or obstacles.has(cell) or cell.x < 0 or cell.x >= COLS or cell.y < 0:
 		return null
 	var block := _new_block(hp, kind, cell)
 	blocks[cell] = block

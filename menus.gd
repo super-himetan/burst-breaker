@@ -25,7 +25,7 @@ const ROW_GAP := 12.0
 const SHOP_ROW_H := 118.0
 const ACHIEVEMENT_ROW_H := 98.0
 const CODEX_ROW_H := 110.0
-const BLOCK_KINDS: Array[String] = ["normal", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss"]
+const BLOCK_KINDS: Array[String] = ["normal", "round", "hex", "diamond", "tri_up", "pill", "big", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss", "wall", "mover", "ramp_l", "bumper", "portal"]
 const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses"]
 const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
 const HOWTO_GLYPHS: Array[String] = ["crosshair", "bolt", "flag", "", "coin"]
@@ -474,10 +474,9 @@ func _draw_title() -> void:
 	var line_1 := t("title_line_1")
 	var line_2 := t("title_line_2")
 	var pulse := 0.5 + sin(time * 1.6) * 0.5
-	var glow_color: Color = UI.ramp(fmod(time * 0.06, 1.0))
-	host.soft_glow(Vector2(BASE_W / 2.0, 260.0), Vector2(860.0, 460.0), Color(glow_color, 0.2 + pulse * 0.1))
+	host.soft_glow(Vector2(BASE_W / 2.0, 260.0), Vector2(860.0, 460.0), Color(UI.ACCENT, 0.16 + pulse * 0.08))
 	host.text_center(Vector2(BASE_W / 2.0, 190.0), line_1, host.fit_size(line_1, 110, 640.0), UI.TEXT)
-	host.text_center(Vector2(BASE_W / 2.0, 310.0), line_2, host.fit_size(line_2, 110, 640.0), glow_color.lerp(UI.TEXT, 0.25))
+	host.text_center(Vector2(BASE_W / 2.0, 310.0), line_2, host.fit_size(line_2, 110, 640.0), UI.TEXT)
 	_wallet_line(440.0)
 	if int(save.best_damage) > 0:
 		var best := "BEST  " + num(save.best_damage)

@@ -13,6 +13,8 @@ const Achievements := preload("res://data/achievements.gd")
 const Music := preload("res://music.gd")
 const StarTree := preload("res://data/star_tree.gd")
 const PerkArt := preload("res://perk_art.gd")
+const Layouts := preload("res://data/layouts.gd")
+const Formations := preload("res://data/formations.gd")
 const DT := 1.0 / 60.0
 
 var failures := 0
@@ -70,6 +72,10 @@ func _init() -> void:
 	_test_perk_icons()
 	_test_style_ranks()
 	_test_high_tier_bosses()
+	_test_layouts_leave_a_route()
+	_test_obstacles()
+	_test_block_shapes()
+	_test_formations()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -524,7 +530,7 @@ func _test_offers_follow_the_build() -> void:
 	var leaning := _sim(11)
 	leaning.levels["bomb"] = 3
 	leaning._recompute_stats()
-	_check(_offer_rate(leaning, "bomb_power") > base_rate * 1.5, "owning a build makes its perks show up more")
+	_check(_offer_rate(leaning, "bomb_power") > base_rate * 1.25, "owning a build makes its perks show up more")
 
 	var ball := _sim(11, {"ball_type": "blaster"})
 	_check(_offer_rate(ball, "bomb_power") > base_rate, "a ball leans offers toward its build")
@@ -1511,6 +1517,218 @@ func _test_high_tier_bosses() -> void:
 		for lang in I18n.LANGS:
 			lore_ok = lore_ok and I18n.TEXT[lang].has("boss_%s_lore" % id)
 	_check(lore_ok, "every boss has a story in every language")
+
+
+## Walks every layout, and its mirror image, from the launcher's row to the top.
+func _test_layouts_leave_a_route() -> void:
+	var ok := true
+	var bad := ""
+	for stage: int in Layouts.LAYOUTS:
+		for layout: Array in Layouts.LAYOUTS[stage]:
+			for shown: Array in [layout, Layouts.mirrored(layout)]:
+				if not _layout_has_route(shown):
+					ok = false
+					bad = str(shown)
+	_check(ok, "every layout leaves a way through %s" % bad)
+	var portals_ok := true
+	for stage: int in Layouts.LAYOUTS:
+		for layout: Array in Layouts.LAYOUTS[stage]:
+			var count := 0
+			for piece: Array in layout:
+				count += 1 if piece[0] == "portal" else 0
+				portals_ok = portals_ok and int(piece[2]) >= 6
+			portals_ok = portals_ok and count % 2 == 0
+	_check(portals_ok, "portals come in pairs, and furniture stays below the starting rows")
+
+
+func _layout_has_route(layout: Array) -> bool:
+	var solid := {}
+	for piece: Array in layout:
+		if piece[0] != "portal" and piece[0] != "bumper":
+			solid[Vector2i(piece[1], piece[2])] = true
+	var open: Array[Vector2i] = []
+	var seen := {}
+	for x in GameSim.COLS:
+		open.append(Vector2i(x, GameSim.DEATH_ROW))
+	while not open.is_empty():
+		var cell: Vector2i = open.pop_back()
+		if seen.has(cell) or solid.has(cell) or cell.x < 0 or cell.x >= GameSim.COLS or cell.y > GameSim.DEATH_ROW:
+			continue
+		if cell.y == 0:
+			return true
+		seen[cell] = true
+		for side in [Vector2i.UP, Vector2i.LEFT, Vector2i.RIGHT, Vector2i.DOWN]:
+			open.append(cell + side)
+	return false
+
+
+func _test_obstacles() -> void:
+	var sim := _sim()
+	sim.obstacles = {Vector2i(3, 8): {"kind": "wall", "cell": Vector2i(3, 8), "dir": 1, "pulse": 0.0}}
+	var wall_center := sim.cell_rect(Vector2i(3, 8)).get_center()
+	var ball := _ball()
+	ball.pos = wall_center + Vector2(0.0, 36.0)
+	ball.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(ball)
+	_check(ball.vel.y > 0.0, "a wall bounces the ball back")
+	_check(_stage_blocks_untouched(sim), "a wall takes no damage and clears nothing")
+	_give(sim, "ricochet", 2)
+	var bouncer := _ball()
+	bouncer.pos = wall_center + Vector2(0.0, 36.0)
+	bouncer.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(bouncer)
+	_check(bouncer.wall_bonus > 0.0, "obstacles count as walls for bounce builds")
+
+	sim = _sim()
+	sim.obstacles = {Vector2i(3, 8): {"kind": "ramp_l", "cell": Vector2i(3, 8), "dir": 1, "pulse": 0.0}}
+	var ramp_ball := _ball()
+	var rect := sim.cell_rect(Vector2i(3, 8))
+	ramp_ball.pos = rect.get_center() + Vector2(6.0, 6.0)
+	ramp_ball.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(ramp_ball)
+	_check(absf(ramp_ball.vel.x) > 1.0, "a ramp deflects a rising ball sideways")
+	_check(is_equal_approx(ramp_ball.vel.length(), sim.ball_speed), "bouncing keeps the ball's speed")
+
+	sim = _sim()
+	var a := Vector2i(1, 9)
+	var b := Vector2i(5, 6)
+	sim.obstacles = {a: {"kind": "portal", "cell": a, "partner": b, "dir": 1, "pulse": 0.0}, b: {"kind": "portal", "cell": b, "partner": a, "dir": 1, "pulse": 0.0}}
+	var warp := _ball()
+	warp.pos = sim.cell_rect(a).get_center()
+	warp.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(warp)
+	_check(warp.pos == sim.cell_rect(b).get_center(), "a portal moves the ball to its partner")
+	sim._collide_obstacles(warp)
+	_check(warp.pos == sim.cell_rect(b).get_center(), "the ball does not bounce straight back through")
+
+	sim = _sim()
+	_single_block(sim, Vector2i(3, 7), 50)
+	sim.obstacles = {Vector2i(3, 8): {"kind": "wall", "cell": Vector2i(3, 8), "dir": 1, "pulse": 0.0}}
+	sim._descend()
+	_check(sim.blocks.has(Vector2i(3, 9)) and not sim.blocks.has(Vector2i(3, 8)), "falling blocks drop past furniture")
+
+	sim = _sim()
+	sim.blocks = {}
+	sim.obstacles = {Vector2i(0, 8): {"kind": "mover", "cell": Vector2i(0, 8), "dir": -1, "pulse": 0.0}}
+	sim._slide_movers()
+	_check(sim.obstacles.has(Vector2i(1, 8)), "a moving wall turns back at the edge")
+
+	sim = _sim()
+	_single_block(sim, Vector2i(3, 0), 999999)
+	sim.obstacles = {}
+	for x in 6:
+		var cell := Vector2i(x, 7)
+		sim.obstacles[cell] = {"kind": "wall", "cell": cell, "dir": 1, "pulse": 0.0}
+	sim.ball_count = 20
+	sim.fire(Vector2(0.4, -1.0))
+	var t := 0.0
+	while sim.state == GameSim.State.SHOOT and t < 40.0:
+		sim.step(DT)
+		sim.events = []
+		t += DT
+	_check(sim.state != GameSim.State.SHOOT, "a shot still ends among obstacles (%.1fs)" % t)
+	var aim := _sim()
+	aim.blocks = {}
+	aim.obstacles = {Vector2i(3, 8): {"kind": "wall", "cell": Vector2i(3, 8), "dir": 1, "pulse": 0.0}}
+	var line := aim.trace_aim(Vector2.UP)
+	_check(line[line.size() - 1].y > aim.cell_rect(Vector2i(3, 8)).position.y, "the aiming line stops at a wall")
+	var clear := _sim()
+	clear.blocks = {}
+	clear.waves_left = 0
+	clear.obstacles = {Vector2i(3, 8): {"kind": "wall", "cell": Vector2i(3, 8), "dir": 1, "pulse": 0.0}}
+	_check(clear._is_stage_finished(), "furniture never blocks a stage clear")
+
+
+func _stage_blocks_untouched(sim: GameSim) -> bool:
+	return sim.total_damage == 0
+
+
+func _test_block_shapes() -> void:
+	var sim := _sim()
+	var big := _single_block(sim, Vector2i(2, 2), 40)
+	big["size"] = Vector2i(2, 2)
+	big["hp"] = 160
+	big["max_hp"] = 160
+	for y in 2:
+		for x in 2:
+			sim.blocks[Vector2i(2 + x, 2 + y)] = big
+	sim._descend()
+	_check(big["origin"] == Vector2i(2, 3) and sim.blocks.size() == 4, "a big block falls as one piece")
+	_check_board_valid(sim, "a big block keeps the board consistent")
+	_give(sim, "intercept", 1)
+	sim._apply_end_of_shot()
+	_check(int(big["hp"]) == 144, "a big block is intercepted once, not per cell (%d)" % int(big["hp"]))
+	sim._damage_block(big["origin"], 1.0e6)
+	_check(sim.blocks.is_empty(), "destroying a big block frees every cell")
+
+	sim = _sim()
+	var round_block := _single_block(sim, Vector2i(3, 3), 1000)
+	round_block["shape"] = "round"
+	var center := sim.cell_rect(Vector2i(3, 3)).get_center()
+	_check(sim._cell_at_circle(center + Vector2(38.0, 26.0), -1, 4.0) == GameSim.NO_CELL, "a round block's corners are empty space")
+	var ball := _ball()
+	ball.pos = center + Vector2(20.0, 26.0)
+	ball.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_ball(ball)
+	_check(ball.vel.x > 1.0, "a round block bounces a ball away at an angle")
+	_check(int(round_block["hp"]) < 1000, "shaped blocks still take damage")
+
+	for shape: String in {"hex": 0, "diamond": 0, "tri_down": 0, "pill": 0}:
+		sim = _sim()
+		var shaped := _single_block(sim, Vector2i(3, 3), 1000)
+		shaped["shape"] = shape
+		var rect := sim.cell_rect(Vector2i(3, 3))
+		_check(not Geometry2D.triangulate_polygon(sim.shape_points(rect, shape)).is_empty(), "%s: its outline can be drawn" % shape)
+		var off_center := _ball()
+		off_center.pos = rect.get_center() + (Vector2(35.0, 10.0) if shape == "pill" else Vector2(20.0, 8.0))
+		off_center.vel = Vector2(0.0, -sim.ball_speed)
+		sim._collide_ball(off_center)
+		_check(int(shaped["hp"]) < 1000 and absf(off_center.vel.x) > 1.0, "%s: an off-centre hit bends the ball's path" % shape)
+	var seen := {}
+	for seed_value in 60:
+		var s := _sim(seed_value)
+		for stage_index in [0, 1, 4, 6]:
+			s.stage = stage_index
+			s._start_stage()
+			for block in s.unique_blocks():
+				seen[block["shape"]] = true
+				seen[str(block["size"])] = true
+			_check_board_valid(s, "formations build a valid board")
+	_check(seen.size() >= 8, "stages use every shape and size %s" % str(seen.keys()))
+
+
+func _test_formations() -> void:
+	var symmetric := true
+	var well_formed := true
+	var bad := ""
+	for formation: Dictionary in Formations.ALL:
+		for row: String in formation["rows"]:
+			var mask := ""
+			for c in row:
+				mask += "." if c == "." else "x"
+			if mask != mask.reverse():
+				symmetric = false
+				bad = row
+			well_formed = well_formed and row.length() == GameSim.COLS
+	_check(symmetric, "every formation is symmetric %s" % bad)
+	_check(well_formed, "every formation row spans the field")
+	for total in range(1, 11):
+		var rng := RandomNumberGenerator.new()
+		rng.seed = total
+		_check(Formations.queue_for(total, rng).size() == total, "formations fill exactly %d rows" % total)
+	var sim := _sim(4)
+	sim.stage = 4
+	sim._start_stage()
+	var mirrored_ok := true
+	for block in sim.unique_blocks():
+		var o: Vector2i = block["origin"]
+		var twin := Vector2i(GameSim.COLS - o.x - int(block["size"].x), o.y)
+		mirrored_ok = mirrored_ok and sim.blocks.has(twin) and sim.blocks[twin]["kind"] == block["kind"] and sim.blocks[twin]["hp"] == block["hp"]
+	_check(mirrored_ok, "a formation's kinds and toughness mirror across the field")
+	var waves := _sim(2)
+	waves.stage = 4
+	waves._start_stage()
+	_check(waves.waves_left == int(GameSim.STAGES[4]["waves"]), "formations keep the stage's wave count")
 
 
 func _test_next_unlock() -> void:

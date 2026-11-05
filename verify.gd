@@ -245,6 +245,7 @@ func _verify_specials() -> void:
 	await _shot("12_boss_killed_ja")
 	_check("boss_kill_wipes_field", sim.blocks.is_empty())
 	await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
+	await _verify_obstacles(sim)
 	await _verify_boss_cast(sim)
 	await _tap_button("pause")
 	if host.paused:
@@ -256,6 +257,29 @@ func _verify_specials() -> void:
 
 
 ## Every character gets its entrance, its field look, an angry face and a trick on screen.
+## Shows every kind of furniture, then fires through it for real.
+func _verify_obstacles(sim: GameSim) -> void:
+	sim.state = GameSim.State.AIM
+	sim.boss_force = ""
+	sim.stage = 4
+	sim._start_stage()
+	await _wait(0.3)
+	for piece: Array in [["ramp_l", 1, 9], ["ramp_r", 5, 9], ["mover", 3, 10]]:
+		var cell := Vector2i(piece[1], piece[2])
+		if not sim.obstacles.has(cell):
+			sim.obstacles[cell] = {"kind": piece[0], "cell": cell, "dir": 1, "pulse": 0.0}
+	await _wait(0.2)
+	await _shot("12a_obstacles_ja")
+	_check("stage_has_obstacles", not sim.obstacles.is_empty())
+	var shots_before: int = sim.shots
+	await _fire_at_lowest()
+	await _wait(0.4)
+	await _shot("12b_obstacles_shot_ja")
+	_check("obstacles_allow_firing", sim.shots == shots_before + 1)
+	await _wait_until(func() -> bool: return sim.state != GameSim.State.SHOOT, 20000)
+	_check("shot_ends_among_obstacles", sim.state != GameSim.State.SHOOT)
+
+
 func _verify_boss_cast(sim: GameSim) -> void:
 	for id in Bosses.ids():
 		sim.state = GameSim.State.AIM
