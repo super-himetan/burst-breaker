@@ -101,6 +101,7 @@ mkdir -p build/ios && touch build/.gdignore && /Applications/Godot.app/Contents/
 - `data/cosmetics.gd`: 見た目
 - `menus.gd`: ゲーム以外の各画面
 - `verify.gd`: 実際の入力で全画面を通す確認
+- `web_touch.gd`: Web 版でブラウザのタッチを直接読む（iOS Safari では Godot にタッチが届かないため）
 - `data/`: 強化、玉、ショップ、難易度、実績の定義
 - `tests/run_tests.gd`: ルールとデータのテスト
 - `tests/balance.gd`: ボットによる長期プレイと強さの比較

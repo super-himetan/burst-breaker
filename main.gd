@@ -32,6 +32,7 @@ func _ready() -> void:
 	# Rendering the loop takes a moment, so it must not hold up the first frame.
 	music_task = WorkerThreadPool.add_task(func() -> void: music_layers = Music.render_layers())
 	sim = GameSim.new()
+	web_touch = WebTouch.new()
 	_recover_interrupted_run()
 	if verify_dir != "":
 		# Automated checks should never make noise, whatever the volume settings say.
@@ -240,6 +241,7 @@ func _process(delta: float) -> void:
 	menus.update(delta, screen)
 	var view := get_viewport_rect().size
 	y_offset = maxf((view.y - BASE_H) / 2.0, 0.0)
+	_take_web_touches(view)
 	screen_age += delta
 	if screen == Menus.Screen.GAME and not paused:
 		_process_game(delta)
@@ -341,6 +343,9 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventPanGesture and menus.is_list_screen(screen):
 		menus.scroll_by(screen, -event.delta.y * PAN_SCROLL)
 		return
+	if (event is InputEventScreenTouch or event is InputEventScreenDrag) and web_touch.touched_recently():
+		# The browser already handed this touch over in _take_web_touches.
+		return
 	if event is InputEventScreenTouch and event.index == 0:
 		var p: Vector2 = event.position - Vector2(0.0, y_offset)
 		if event.pressed:
@@ -348,16 +353,30 @@ func _input(event: InputEvent) -> void:
 		else:
 			_on_release(p)
 	elif event is InputEventScreenDrag and event.index == 0:
-		var p: Vector2 = event.position - Vector2(0.0, y_offset)
-		if aiming:
-			aim_current = p
-		elif list_active:
-			_on_list_drag(p)
+		_on_drag(event.position - Vector2(0.0, y_offset))
 	elif event is InputEventMouseMotion and not DisplayServer.is_touchscreen_available():
 		# With a mouse the aim simply follows the cursor, and a click fires.
 		hovering = true
 		if not aiming:
 			aim_current = event.position - Vector2(0.0, y_offset)
+
+func _on_drag(p: Vector2) -> void:
+	if aiming:
+		aim_current = p
+	elif list_active:
+		_on_list_drag(p)
+
+## On the web the touches come from the browser itself, because iOS Safari does not pass them on to Godot.
+func _take_web_touches(view: Vector2) -> void:
+	for touch: Array in web_touch.take(view):
+		var p: Vector2 = touch[1] - Vector2(0.0, y_offset)
+		match String(touch[0]):
+			"start":
+				_on_press(p)
+			"move":
+				_on_drag(p)
+			"end":
+				_on_release(p)
 
 ## Keyboard shortcuts for the desktop build. They go through the same checks as a tap.
 func _on_key(key: int) -> void:

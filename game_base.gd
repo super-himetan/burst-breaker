@@ -9,6 +9,7 @@ const I18n := preload("res://i18n.gd")
 const SaveData := preload("res://save_data.gd")
 const Menus := preload("res://menus.gd")
 const Verify := preload("res://verify.gd")
+const WebTouch := preload("res://web_touch.gd")
 const Music := preload("res://music.gd")
 const Perks := preload("res://data/perks.gd")
 const Balls := preload("res://data/balls.gd")
@@ -171,6 +172,7 @@ var players: Array[AudioStreamPlayer] = []
 var next_player := 0
 var music_players: Array[AudioStreamPlayer] = []
 var music_task := -1
+var web_touch: WebTouch
 var music_layers: Array[PackedByteArray] = []
 var end_age := 0.0
 var wipe := 0.0
