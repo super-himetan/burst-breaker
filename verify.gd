@@ -494,6 +494,13 @@ func _verify_meta_screens() -> void:
 	_check("boss_page_closes", host.menus._boss_page == "")
 	await _tap_button("back")
 
+	# The loadout checks after this need a player who has won, unlocked a ball and climbed tiers.
+	save.wins = 2
+	save.lifetime["wins"] = 2
+	save.lifetime["best_tier"] = 12
+	save.achievements["wins_1"] = true
+	save.achievements["runs_2"] = true
+	save.tier = 0
 	save.lifetime["coins"] = maxi(save.stat_value("coins"), 40000)
 	save.update_stars()
 	await _tap_button("stars")
