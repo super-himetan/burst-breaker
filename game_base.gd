@@ -33,6 +33,9 @@ const ACCEPT_INPUT_AFTER := 0.3
 const FONT_LATIN := ["Avenir Next", "Helvetica Neue", "Roboto", "sans-serif"]
 const FONT_JAPANESE := ["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "sans-serif"]
 const BUNDLED_FONT := preload("res://fonts/NotoSansJP-Game.ttf")
+## The first-run hint: a ghost finger visits these points in turn, one tap per cycle.
+const TUTORIAL_CYCLE := 2.4
+const TUTORIAL_TARGETS: Array[Vector2] = [Vector2(230.0, 560.0), Vector2(500.0, 470.0), Vector2(380.0, 660.0)]
 const SAMPLE_RATE := 22050
 const BURST_WINDUP := 1.15
 const BURST_AFTERGLOW := 1.1

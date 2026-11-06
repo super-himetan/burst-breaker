@@ -451,17 +451,43 @@ func _draw_launcher() -> void:
 	if sim.guards > 0:
 		for i in sim.guards:
 			PerkArt.draw_glyph(canvas, "shield", Vector2(70.0 + i * 36.0, 1110.0), 14.0, UI.MINT)
-	if not aiming and not save.tutorial_done:
-		text_center(Vector2(BASE_W / 2.0, 1180.0), t("tutorial"), 36, UI.GOLD)
-		# A pointer drifts across the field, showing that you aim by pointing.
-		var drift := Vector2(BASE_W / 2.0 + sin(time * 1.8) * 220.0, 640.0 + cos(time * 2.6) * 50.0)
-		soft_glow(drift, Vector2(120.0, 120.0), Color(1.0, 1.0, 1.0, 0.5))
-		canvas.draw_circle(drift, 18.0, Color(1.0, 1.0, 1.0, 0.85))
+	if not save.tutorial_done:
+		_draw_tutorial()
+
+## Until the first shot, a ghost finger shows the whole move: point somewhere, see the line, tap.
+func _draw_tutorial() -> void:
+	if aiming:
+		text_center(Vector2(BASE_W / 2.0, 1180.0), t("tutorial_release"), 38, UI.GOLD)
+		return
+	var touch := DisplayServer.is_touchscreen_available()
+	text_center(Vector2(BASE_W / 2.0, 1166.0), t("tutorial" if touch else "tutorial_click"), 36, UI.GOLD)
+	text_center(Vector2(BASE_W / 2.0, 1214.0), t("tutorial_sub"), 24, UI.MUTED, font_body)
+	var cycle := fmod(time, TUTORIAL_CYCLE) / TUTORIAL_CYCLE
+	var round_index := int(time / TUTORIAL_CYCLE) % TUTORIAL_TARGETS.size()
+	var target: Vector2 = TUTORIAL_TARGETS[round_index]
+	var start: Vector2 = TUTORIAL_TARGETS[(round_index + TUTORIAL_TARGETS.size() - 1) % TUTORIAL_TARGETS.size()]
+	var move := smoothstep(0.0, 0.45, cycle)
+	var finger := start.lerp(target, move)
+	var appear := minf(cycle / 0.1, 1.0) * (1.0 - smoothstep(0.85, 1.0, cycle))
+	# The line shows where the balls would go, as the real aim does.
+	if cycle > 0.3:
+		_draw_aim_line(finger, appear * 0.6)
+	# A ring, unlike the solid balls, marks the fingertip; it ripples outwards on the tap.
+	var pressed := cycle > 0.5 and cycle < 0.62
+	var ring := 30.0 * (0.85 if pressed else 1.0)
+	canvas.draw_arc(finger, ring, 0.0, TAU, 40, Color(UI.GOLD, 0.9 * appear), 5.0, true)
+	canvas.draw_circle(finger, 9.0, Color(UI.GOLD, 0.9 * appear))
+	if cycle > 0.5:
+		var ripple := clampf((cycle - 0.5) / 0.3, 0.0, 1.0)
+		canvas.draw_arc(finger, 30.0 + ripple * 60.0, 0.0, TAU, 48, Color(UI.GOLD, (1.0 - ripple) * 0.7 * appear), 4.0, true)
 
 func _draw_aim() -> void:
-	if not _can_aim_at(aim_current):
+	_draw_aim_line(aim_current, 1.0)
+
+func _draw_aim_line(target: Vector2, alpha: float) -> void:
+	if not _can_aim_at(target):
 		return
-	var points := sim.trace_aim(aim_current - Vector2(sim.launch_x, GameSim.LAUNCH_Y))
+	var points := sim.trace_aim(target - Vector2(sim.launch_x, GameSim.LAUNCH_Y))
 	var phase := fmod(time * 180.0, 32.0)
 	var travelled := 0.0
 	for i in range(points.size() - 1):
@@ -471,6 +497,6 @@ func _draw_aim() -> void:
 		var d := phase
 		while d < length:
 			var fade := 1.0 - clampf((travelled + d) / 1000.0, 0.0, 0.85)
-			canvas.draw_circle(a.lerp(b, d / length), 2.0 + 4.0 * fade, Color(1.0, 1.0, 1.0, 0.25 + 0.65 * fade))
+			canvas.draw_circle(a.lerp(b, d / length), 2.0 + 4.0 * fade, Color(1.0, 1.0, 1.0, (0.25 + 0.65 * fade) * alpha))
 			d += 32.0
 		travelled += length
