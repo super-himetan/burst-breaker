@@ -72,7 +72,12 @@ mkdir -p build/ios && touch build/.gdignore && /Applications/Godot.app/Contents/
 ## 構成
 
 - `sim/game_sim.gd`: ゲームのルール（描画に依存しない）
-- `main.gd`: 画面遷移、入力、ゲーム画面、エフェクト、効果音
+- `main.gd`: アプリの流れ、入力、ルールのイベントへの反応
+- `game_effects.gd`: 粒子、揺れ、スロー、ボスの演出
+- `game_screens.gd`: HUD、カード、結果、カットイン、エンディングの描画
+- `game_field.gd`: 盤面（ブロック、ボス、仕掛け、玉、発射台）の描画
+- `game_audio.gd`: 効果音と BGM
+- `game_base.gd`: 共有の状態、定数、描画の部品（上の層ほど下の層だけを呼ぶ）
 - `i18n.gd`: 表示テキスト（日本語が基本で、英語も選べる）
 - `save_data.gd`: 設定と記録の保存
 - `music.gd`: コードで生成する BGM
