@@ -30,7 +30,6 @@ var reduce_fx := false
 var tutorial_done := false
 
 var coins := 0
-var coins_this_life := 0
 var stars := 0
 var shop := {}
 var best_damage := 0
@@ -52,6 +51,8 @@ var contract := "none"
 var notes := 0
 var worn := {}
 var true_ending_seen := false
+## New stars from the most recent run, for the results to announce.
+var stars_gained := 0
 
 
 func _init(save_path := DEFAULT_PATH) -> void:
@@ -77,7 +78,6 @@ func load_file() -> void:
 	reduce_fx = bool(data.get("reduce_fx", reduce_fx))
 	tutorial_done = bool(data.get("tutorial_done", tutorial_done))
 	coins = int(data.get("coins", coins))
-	coins_this_life = int(data.get("coins_this_life", coins_this_life))
 	stars = int(data.get("stars", stars))
 	best_damage = int(data.get("best_damage", best_damage))
 	best_stage = int(data.get("best_stage", best_stage))
@@ -163,7 +163,6 @@ func save_file() -> bool:
 		"reduce_fx": reduce_fx,
 		"tutorial_done": tutorial_done,
 		"coins": coins,
-		"coins_this_life": coins_this_life,
 		"stars": stars,
 		"shop": shop,
 		"best_damage": best_damage,
@@ -443,27 +442,20 @@ func buy(id: String) -> bool:
 	return true
 
 
-func stars_on_prestige() -> int:
-	return int(floor(sqrt(coins_this_life / COINS_PER_STAR_SQUARED)))
+## Stars come from lifetime coins, and are never taken away again.
+func stars_for_coins(total: int) -> int:
+	return int(floor(sqrt(total / COINS_PER_STAR_SQUARED)))
 
 
-func can_prestige() -> bool:
-	return wins > 0 and stars_on_prestige() > 0
-
-
-## Trades coins and shop levels for stars. Records, achievements and tiers are kept.
-func prestige() -> bool:
-	if not can_prestige():
-		return false
-	stars += stars_on_prestige()
+## Returns how many new stars were just earned.
+func update_stars() -> int:
+	var earned := stars_for_coins(stat_value("coins"))
+	if earned <= stars:
+		return 0
+	var gained := earned - stars
+	stars = earned
 	lifetime["stars"] = stars
-	var kept := 0.0
-	for id: String in star_nodes:
-		kept += float(StarTree.NODES[id]["add"].get("keep_coins", 0.0)) * int(star_nodes[id])
-	coins = int(coins * kept)
-	coins_this_life = 0
-	shop = {}
-	return true
+	return gained
 
 
 func mark_perk_seen(id: String) -> void:
@@ -524,12 +516,12 @@ func record_run(summary: Dictionary) -> bool:
 	best_damage = maxi(best_damage, damage)
 	best_stage = maxi(best_stage, stage)
 	coins += earned
-	coins_this_life += earned
 	runs += 1
 	_gain_mastery(String(summary["ball_type"]), run_xp(stage, won, int(summary["tier"])))
 	_add_stat("runs", 1)
 	_add_stat("damage", damage)
 	_add_stat("coins", earned)
+	stars_gained = update_stars()
 	lifetime["best_combo"] = maxi(stat_value("best_combo"), combo)
 	lifetime["best_shot"] = maxi(stat_value("best_shot"), best_shot)
 	var counters: Dictionary = summary.get("counters", {})

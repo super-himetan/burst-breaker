@@ -222,9 +222,6 @@ func _campaign(total_runs: int, seed_value: int) -> void:
 		recent_wins.append(won)
 		if recent_wins.size() > 20:
 			recent_wins.pop_front()
-		# A sensible player prestiges once the shop has flattened out and the payoff is real.
-		if save.can_prestige() and save.shop_level("damage") >= 18 and save.stars_on_prestige() >= maxi(3, save.stars / 2):
-			save.prestige()
 		if run <= 10 or run % 10 == 0:
 			var wins := 0
 			for w in recent_wins:

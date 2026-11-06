@@ -55,7 +55,7 @@ func _init() -> void:
 	_test_burst_gauge()
 	_test_burst_moves()
 	_test_tiers()
-	_test_shop_and_prestige()
+	_test_shop_and_stars()
 	_test_achievements_data()
 	_test_achievements_flow()
 	_test_text_coverage()
@@ -1028,7 +1028,7 @@ func _test_tiers() -> void:
 	_check(not t25.blocks.is_empty(), "tiers past the rule list still work")
 
 
-func _test_shop_and_prestige() -> void:
+func _test_shop_and_stars() -> void:
 	var data := SaveData.new(_temp_save_path("shop"))
 	_check(not data.buy("damage"), "cannot buy without coins")
 	data.coins = 100
@@ -1044,20 +1044,13 @@ func _test_shop_and_prestige() -> void:
 	var b := _single_block(stronger, Vector2i(3, 2), 1000)
 	_check(stronger._scale_damage(10.0, b) > plain._scale_damage(10.0, a), "shop damage raises damage")
 
-	data = SaveData.new(_temp_save_path("prestige"))
-	data.coins = 5000
-	data.coins_this_life = 40000
+	data = SaveData.new(_temp_save_path("stars"))
 	data.shop = {"damage": 5}
-	_check(not data.can_prestige(), "prestige needs a clear first")
-	data.wins = 1
-	var gained := data.stars_on_prestige()
-	_check(gained == 2, "stars follow lifetime coins (%d)" % gained)
-	data.lifetime["best_tier"] = 3
-	data.achievements["runs_1"] = true
-	_check(data.prestige(), "prestige works after a clear")
-	_check(data.stars == 2 and data.coins == 0 and data.shop.is_empty() and data.coins_this_life == 0, "prestige resets coins and shop")
-	_check(data.max_tier() == 3 and data.has_achievement("runs_1"), "prestige keeps tiers and achievements")
-	_check(not data.can_prestige(), "prestige needs new coins")
+	data.record_run({"damage": 1, "combo": 1, "best_shot": 1, "stage": 1, "coins": 40000, "won": false, "tier": 0, "ball_type": "normal", "counters": {}})
+	_check(data.stars == 2 and data.stars_gained == 2, "stars follow lifetime coins (%d)" % data.stars)
+	_check(data.shop_level("damage") == 5 and data.coins == 40000, "earning stars takes nothing away")
+	data.record_run({"damage": 1, "combo": 1, "best_shot": 1, "stage": 1, "coins": 1, "won": false, "tier": 0, "ball_type": "normal", "counters": {}})
+	_check(data.stars == 2 and data.stars_gained == 0, "stars are announced only when new")
 	var starred := _sim(1, {"stars": 10})
 	var c := _single_block(starred, Vector2i(3, 2), 1000)
 	_check(is_equal_approx(starred._scale_damage(10.0, c), 35.0), "stars multiply damage")
@@ -1330,16 +1323,6 @@ func _test_star_tree() -> void:
 	_check(loaded.star_points_left() == 4 and loaded.stars == 4, "resetting refunds every star")
 	var burst := _sim(1, {"star_nodes": {"s_burst_start": 2}})
 	_check(is_equal_approx(burst.burst_charge, GameSim.BURST_START + 0.2), "the tree can start the gauge higher")
-	var kept := SaveData.new(_temp_save_path("stars_keep"))
-	kept.stars = 3
-	kept.raise_star("s_coins")
-	kept.star_nodes["s_keep"] = 2
-	kept.wins = 1
-	kept.coins = 1000
-	kept.coins_this_life = 60000
-	kept.prestige()
-	_check(kept.coins == 200, "savings keep part of the coins through prestige")
-	_check(kept.star_level("s_keep") == 2, "the tree survives prestige")
 	var cost_total := 0
 	for id in StarTree.ids():
 		cost_total += int(StarTree.NODES[id]["cost"]) * int(StarTree.NODES[id]["max"])

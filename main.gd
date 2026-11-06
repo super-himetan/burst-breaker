@@ -322,8 +322,6 @@ func _on_back_request() -> void:
 			_set_screen(settings_return)
 		Menus.Screen.SHOP:
 			_set_screen(shop_return)
-		Menus.Screen.STARS:
-			_set_screen(Menus.Screen.PRESTIGE)
 		Menus.Screen.COSMETICS:
 			_set_screen(Menus.Screen.LOADOUT)
 		Menus.Screen.ENDING:
@@ -437,6 +435,8 @@ func _bank_run() -> void:
 	if sim.total_damage == 0:
 		return
 	run_new_record = save.record_run(_run_summary())
+	if save.stars_gained > 0:
+		toasts.append({"text": t("stars_toast") % save.stars_gained, "t": 0.0})
 	var mastery_now := save.mastery_level(sim.ball_type)
 	if mastery_now > run_mastery_before:
 		toasts.append({"text": t("mastery_toast") % [t("ball_" + sim.ball_type), mastery_now], "t": 0.0})
@@ -1090,8 +1090,6 @@ func _press_button(id: String) -> void:
 			_set_screen(Menus.Screen.ACHIEVEMENTS)
 		"codex":
 			_set_screen(Menus.Screen.CODEX)
-		"prestige":
-			_set_screen(Menus.Screen.PRESTIGE)
 		"howto":
 			_set_screen(Menus.Screen.HOWTO)
 		"settings":
@@ -1103,8 +1101,6 @@ func _press_button(id: String) -> void:
 					_set_screen(settings_return)
 				Menus.Screen.SHOP:
 					_set_screen(shop_return)
-				Menus.Screen.STARS:
-					_set_screen(Menus.Screen.PRESTIGE)
 				Menus.Screen.COSMETICS:
 					_set_screen(Menus.Screen.LOADOUT)
 				_:

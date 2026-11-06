@@ -16,7 +16,7 @@ const Cosmetics := preload("res://data/cosmetics.gd")
 const Tiers := preload("res://data/tiers.gd")
 const GameSim := preload("res://sim/game_sim.gd")
 
-enum Screen { TITLE, HOWTO, SETTINGS, GAME, LOADOUT, SHOP, ACHIEVEMENTS, CODEX, PRESTIGE, STARS, COSMETICS, ENDING }
+enum Screen { TITLE, HOWTO, SETTINGS, GAME, LOADOUT, SHOP, ACHIEVEMENTS, CODEX, STARS, COSMETICS, ENDING }
 
 const BASE_W := 720.0
 const BASE_H := 1280.0
@@ -32,7 +32,7 @@ const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
 const COSMETIC_ROW_H := 84.0
 const NOTE_ROW_H := 130.0
 const HOWTO_GLYPHS: Array[String] = ["crosshair", "bolt", "flag", "", "coin"]
-const TITLE_GLYPHS := {"shop": "coin", "achievements": "crown", "codex": "cards", "prestige": "star", "howto": "target", "settings": "gear"}
+const TITLE_GLYPHS := {"shop": "coin", "achievements": "crown", "codex": "cards", "stars": "star", "howto": "target", "settings": "gear"}
 const BUY_ALL_STEP := 0.07
 const MILESTONE_HOLD := 0.55
 const MILESTONE_SECONDS := 1.3
@@ -44,7 +44,6 @@ var host: Node2D
 var save: RefCounted
 var scroll := 0.0
 var codex_tab := "perks"
-var confirm_prestige := false
 var _achievement_rows: Array[Dictionary] = []
 var _achievements_done := 0
 var _boss_page := ""
@@ -71,7 +70,6 @@ func num(value: int) -> String:
 
 func on_enter(screen: int) -> void:
 	scroll = 0.0
-	confirm_prestige = false
 	_boss_page = ""
 	_buying = false
 	_milestone_time = 0.0
@@ -139,7 +137,7 @@ func buttons(screen: int) -> Array[Dictionary]:
 	match screen:
 		Screen.TITLE:
 			list.append(_button("start", Rect2(70.0, 570.0, 580.0, 140.0), t("start"), "primary"))
-			var grid: Array[String] = ["shop", "achievements", "codex", "prestige", "howto", "settings"]
+			var grid: Array[String] = ["shop", "stars", "achievements", "codex", "howto", "settings"]
 			for i in grid.size():
 				var rect := Rect2(70.0 + (i % 3) * 200.0, 750.0 + (i / 3) * 170.0, 180.0, 150.0)
 				list.append(_button(grid[i], rect, t(grid[i]), "tile"))
@@ -191,15 +189,6 @@ func buttons(screen: int) -> Array[Dictionary]:
 			list.append(_button("ending_close", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
 		Screen.COSMETICS:
 			list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
-		Screen.PRESTIGE:
-			if confirm_prestige:
-				list.append(_button("prestige_yes", Rect2(70.0, 720.0, 280.0, 110.0), t("yes"), "primary"))
-				list.append(_button("prestige_no", Rect2(370.0, 720.0, 280.0, 110.0), t("no")))
-			else:
-				var style := "primary" if save.can_prestige() else "disabled"
-				list.append(_button("prestige_do", Rect2(90.0, 780.0, 540.0, 130.0), t("prestige_do"), style))
-				list.append(_button("stars", Rect2(90.0, 930.0, 540.0, 100.0), t("stars_tree"), "normal" if int(save.stars) > 0 else "disabled"))
-				list.append(_button("back", Rect2(180.0, 1120.0, 360.0, 92.0), t("back")))
 	return list
 
 
@@ -255,15 +244,6 @@ func press(id: String) -> bool:
 		"stars_reset":
 			save.reset_stars()
 			save.save_file()
-		"prestige_do":
-			if save.can_prestige():
-				confirm_prestige = true
-		"prestige_no":
-			confirm_prestige = false
-		"prestige_yes":
-			confirm_prestige = false
-			save.prestige()
-			host.on_progress_changed()
 		_:
 			return false
 	return true
@@ -359,8 +339,6 @@ func draw(screen: int) -> void:
 			_heading(t("codex"), 58.0)
 			if codex_tab == "perks":
 				host.text_center(Vector2(BASE_W / 2.0, 1106.0), t("codex_seen") % [save.perks_seen.size(), _codex_ids().size()], 20, UI.MUTED, host.font_body)
-		Screen.PRESTIGE:
-			_draw_prestige()
 
 
 func _heading(title: String, y: float) -> void:
@@ -424,7 +402,7 @@ func draw_buttons(list: Array[Dictionary], time: float) -> void:
 		if button["id"] == "shop" and _any_purchase_available():
 			host.soft_glow(dot, Vector2(44.0, 44.0), Color(UI.ACCENT, 0.7))
 			host.canvas.draw_circle(dot, 8.0, UI.ACCENT)
-		if button["id"] == "prestige" and (save.can_prestige() or _can_spend_stars()):
+		if button["id"] == "stars" and _can_spend_stars():
 			host.soft_glow(dot, Vector2(44.0, 44.0), Color(UI.STAR, 0.7))
 			host.canvas.draw_circle(dot, 8.0, UI.STAR)
 
@@ -814,25 +792,5 @@ func _draw_boss_page(id: String) -> void:
 	host.text_center(Vector2(BASE_W / 2.0, 950.0), trick, host.fit_size(trick, 25, 640.0), UI.GOLD, host.font_body)
 	if beaten:
 		host.text_center(Vector2(BASE_W / 2.0, 1000.0), t("boss_defeated") % save.stat_value("boss_" + id), 22, UI.MUTED, host.font_label)
-
-
-func _draw_prestige() -> void:
-	var pulse := 0.5 + sin(float(host.time) * 1.6) * 0.5
-	var center := Vector2(BASE_W / 2.0, 250.0)
-	host.soft_glow(center, Vector2(720.0, 620.0), Color(UI.STAR, 0.16 + pulse * 0.12))
-	PerkArt.draw_glyph(host.canvas, "star", center, 96.0 + pulse * 6.0, UI.STAR)
-	host.text_center(center + Vector2(0.0, 150.0), str(save.stars), 72, UI.TEXT)
-	host.text_center(Vector2(BASE_W / 2.0, 500.0), t("prestige_desc_1"), host.fit_size(t("prestige_desc_1"), 30, 620.0), UI.TEXT, host.font_body)
-	host.text_center(Vector2(BASE_W / 2.0, 548.0), t("prestige_bonus"), host.fit_size(t("prestige_bonus"), 24, 620.0), UI.GOLD, host.font_body)
-	if confirm_prestige:
-		host.text_center(Vector2(BASE_W / 2.0, 640.0), t("prestige_confirm"), 44, UI.ACCENT)
-		host.text_center(Vector2(BASE_W / 2.0, 690.0), t("prestige_keep"), host.fit_size(t("prestige_keep"), 24, 620.0), UI.MUTED, host.font_body)
-		return
-	if not save.can_prestige():
-		var locked: String = t("prestige_locked") if int(save.wins) <= 0 else t("prestige_more")
-		host.text_center(Vector2(BASE_W / 2.0, 680.0), locked, host.fit_size(locked, 28, 620.0), UI.MUTED, host.font_body)
-		return
-	var gain := t("prestige_gain") % save.stars_on_prestige()
-	host.text_center(Vector2(BASE_W / 2.0, 670.0), gain, 56, UI.STAR)
 
 

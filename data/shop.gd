@@ -1,5 +1,5 @@
 extends RefCounted
-## Permanent upgrades bought with coins. Prestige resets their levels.
+## Permanent upgrades bought with coins.
 ## Every `every` levels an item pays a milestone: `bonus` adds up like `add`, `bonus_mult` multiplies.
 ## `level_mult` multiplies on every level. `after_all` items open once the rest are maxed.
 

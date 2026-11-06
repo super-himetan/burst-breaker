@@ -494,28 +494,8 @@ func _verify_meta_screens() -> void:
 	_check("boss_page_closes", host.menus._boss_page == "")
 	await _tap_button("back")
 
-	await _tap_button("prestige")
-	await _shot("18_prestige_locked_ja")
-	_check("prestige_locked_without_clear", not save.can_prestige())
-	await _tap_button("back")
-
-	save.wins = 2
-	save.lifetime["wins"] = 2
-	save.lifetime["best_tier"] = 12
-	save.coins_this_life = 40000
-	save.achievements["wins_1"] = true
-	save.achievements["runs_2"] = true
-	save.tier = 0
-	await _tap_button("prestige")
-	await _shot("19_prestige_ready_ja")
-	await _tap_button("prestige_do")
-	await _shot("20_prestige_confirm_ja")
-	_check("prestige_asks_first", save.stars == 0)
-	await _tap_button("prestige_no")
-	_check("prestige_can_cancel", save.stars == 0 and save.shop_level("damage") >= 1)
-	await _tap_button("prestige_do")
-	await _tap_button("prestige_yes")
-	_check("prestige_grants_stars", save.stars == 2 and save.shop.is_empty() and save.coins >= 0)
+	save.lifetime["coins"] = maxi(save.stat_value("coins"), 40000)
+	save.update_stars()
 	await _tap_button("stars")
 	_check("star_tree_opens", host.screen == Menus.Screen.STARS)
 	await _wait(0.4)
@@ -526,9 +506,8 @@ func _verify_meta_screens() -> void:
 	await _tap_button("stars_reset")
 	_check("star_reset_refunds", save.star_points_left() == 2)
 	await _tap_button("back")
-	_check("star_tree_back_to_prestige", host.screen == Menus.Screen.PRESTIGE)
-	await _tap_button("back")
-	await _shot("21_title_after_prestige_ja")
+	_check("star_tree_back_to_title", host.screen == Menus.Screen.TITLE)
+	await _shot("21_title_with_stars_ja")
 
 	await _tap_button("start")
 	await _tap_button("ball_iron")
@@ -582,11 +561,8 @@ func _verify_english() -> void:
 	await _tap_button("tab_blocks")
 	await _shot("35_codex_blocks_en")
 	await _tap_button("back")
-	await _tap_button("prestige")
-	await _shot("36_prestige_en")
 	await _tap_button("stars")
 	await _shot("36a_star_tree_en")
-	await _tap_button("back")
 	await _tap_button("back")
 	await _tap_button("howto")
 	await _shot("37_howto_en")
