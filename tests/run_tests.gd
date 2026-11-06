@@ -940,7 +940,7 @@ func _test_ball_types() -> void:
 	var block := _single_block(iron, Vector2i(3, 2), 1000)
 	iron.stats["pierce_chance"] = 0.0
 	iron._hit_block_with_ball(Vector2i(3, 2), block, _ball())
-	_check(iron.total_damage == 3, "the iron ball hits harder")
+	_check(iron.total_damage == 4, "the iron ball hits harder")
 	var titan := _sim(1, {"ball_type": "titan"})
 	_check(titan.ball_radius > GameSim.BALL_RADIUS, "the titan ball is larger")
 

@@ -2,7 +2,7 @@ extends RefCounted
 ## Difficulty tiers. Clearing a tier unlocks the next, with no upper limit.
 ## Rules accumulate; tiers past the last rule only raise block HP and rewards.
 
-const HP_GROWTH := 1.45
+const HP_GROWTH := 1.5
 const COIN_PER_TIER := 0.2
 
 ## Index i takes effect at tier i + 1.

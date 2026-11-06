@@ -136,7 +136,7 @@ func buttons(screen: int) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 	match screen:
 		Screen.TITLE:
-			list.append(_button("honor", Rect2(170.0, 362.0, 380.0, 48.0), t(save.honor), "small"))
+			list.append(_button("honor", Rect2(170.0, 384.0, 380.0, 44.0), t(save.honor), "small"))
 			list.append(_button("start", Rect2(70.0, 570.0, 580.0, 140.0), t("start"), "primary"))
 			var grid: Array[String] = ["shop", "stars", "achievements", "codex", "howto", "settings"]
 			for i in grid.size():
@@ -520,10 +520,10 @@ func _draw_title() -> void:
 	host.soft_glow(Vector2(BASE_W / 2.0, 260.0), Vector2(860.0, 460.0), Color(UI.ACCENT, 0.16 + pulse * 0.08))
 	host.text_center(Vector2(BASE_W / 2.0, 190.0), line_1, host.fit_size(line_1, 110, 640.0), UI.TEXT)
 	host.text_center(Vector2(BASE_W / 2.0, 310.0), line_2, host.fit_size(line_2, 110, 640.0), UI.TEXT)
-	_wallet_line(440.0)
+	_wallet_line(466.0)
 	if int(save.best_damage) > 0:
 		var best := "BEST  " + num(save.best_damage)
-		host.text_center(Vector2(BASE_W / 2.0, 492.0), best, 24, UI.MUTED, host.font_label)
+		host.text_center(Vector2(BASE_W / 2.0, 512.0), best, 24, UI.MUTED, host.font_label)
 
 
 func _draw_howto() -> void:

@@ -20,8 +20,8 @@ const BONUS_COINS := 2.0
 const FORGE_OFFERS := 3
 ## The danger route: the next stage is tougher, and pays for it.
 const DANGER_HP := 1.35
-const DANGER_COINS := 2.0
-const TREASURE_COINS := 25
+const DANGER_COINS := 1.6
+const TREASURE_COINS := 15
 const MERCHANT_OFFERS := 3
 const MERCHANT_PRICE := 15
 
@@ -89,14 +89,14 @@ const PILOTS := {
 
 ## Small goals for one run. `reward` is multiplied by the stage reached, plus one.
 const MISSIONS := {
-	"kills": {"target": 60, "reward": 4},
-	"explosions": {"target": 15, "reward": 5},
-	"splits": {"target": 30, "reward": 5},
-	"crits": {"target": 25, "reward": 5},
-	"overkills": {"target": 20, "reward": 5},
-	"style_s": {"target": 2, "reward": 6},
-	"bursts": {"target": 2, "reward": 4},
-	"bosses": {"target": 1, "reward": 8},
+	"kills": {"target": 60, "reward": 2},
+	"explosions": {"target": 15, "reward": 2},
+	"splits": {"target": 30, "reward": 2},
+	"crits": {"target": 25, "reward": 2},
+	"overkills": {"target": 20, "reward": 2},
+	"style_s": {"target": 2, "reward": 3},
+	"bursts": {"target": 2, "reward": 2},
+	"bosses": {"target": 1, "reward": 4},
 }
 const MISSIONS_PER_RUN := 3
 

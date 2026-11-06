@@ -28,7 +28,7 @@ const BALL_SPEED := 1100.0
 const LAUNCH_INTERVAL := 0.07
 const MAX_BALLS := 150
 const FIXED_DT := 1.0 / 120.0
-const RECALL_TIME := 16.0
+const RECALL_TIME := 12.0
 const CHAIN_DELAY := 0.07
 const CRIT_BASE_MULT := 2.5
 const NO_CELL := Vector2i(-9999, -9999)
@@ -59,10 +59,10 @@ const STAGES := [
 	{"rows": 3, "waves": 2, "hp_min": 3, "hp_max": 8, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04}},
 	{"rows": 4, "waves": 2, "hp_min": 8, "hp_max": 16, "density": 0.7, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08}},
 	{"rows": 2, "waves": 0, "hp_min": 12, "hp_max": 26, "density": 0.6, "specials": {"bomb": 0.14, "treasure": 0.05}, "boss": {"pool": 0, "hp": 700, "every": 3}},
-	{"rows": 5, "waves": 3, "hp_min": 28, "hp_max": 58, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
-	{"rows": 5, "waves": 3, "hp_min": 42, "hp_max": 90, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
-	{"rows": 6, "waves": 3, "hp_min": 62, "hp_max": 132, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
-	{"rows": 3, "waves": 0, "hp_min": 70, "hp_max": 140, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"pool": 1, "hp": 16000, "every": 1}},
+	{"rows": 5, "waves": 3, "hp_min": 34, "hp_max": 70, "density": 0.75, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.08}},
+	{"rows": 5, "waves": 3, "hp_min": 50, "hp_max": 108, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.08, "regen": 0.08, "armor": 0.1, "breeder": 0.05}},
+	{"rows": 6, "waves": 3, "hp_min": 75, "hp_max": 160, "density": 0.8, "specials": {"bomb": 0.1, "treasure": 0.04, "extra_ball": 0.04, "shield": 0.1, "regen": 0.1, "armor": 0.1, "breeder": 0.07}},
+	{"rows": 3, "waves": 0, "hp_min": 70, "hp_max": 140, "density": 0.65, "specials": {"bomb": 0.14, "treasure": 0.05, "shield": 0.08, "regen": 0.08, "armor": 0.08}, "boss": {"pool": 1, "hp": 19500, "every": 1}},
 ]
 
 ## Reached only by players who have beaten every other boss.
@@ -70,15 +70,15 @@ const TRUE_STAGE := {"rows": 3, "waves": 0, "hp_min": 90, "hp_max": 180, "densit
 const RUSH_STAGE_POOL := {0: 3, 1: 7, 2: 7}
 const ELITE_CHANCE := 0.1
 const ELITE_HP := 4.0
-const ELITE_COINS := 8.0
+const ELITE_COINS := 4.0
 const BOUNTY_CHANCE := 0.12
 const BOUNTY_HP := 2.5
-const BOUNTY_COINS := 18.0
+const BOUNTY_COINS := 10.0
 const BOUNTY_TURNS := 4
-const FEVER_COMBO := 120
-const FEVER_COINS := 3.0
+const FEVER_COMBO := 250
+const FEVER_COINS := 2.0
 const JACKPOT_CHANCE := 0.05
-const JACKPOT_COINS := 25.0
+const JACKPOT_COINS := 15.0
 const NOTE_CHANCE := 0.6
 const ALLY_HP := 0.3
 ## Stage conditions: wind pushes balls sideways, a gravity well bends them, fog hides colours.
@@ -1254,7 +1254,7 @@ func _fixed_step(dt: float) -> void:
 	sim_time += dt
 	_shot_time += dt
 	# Long shots speed up so nobody waits on a lone stuck ball.
-	var move_dt := dt * (1.0 + clampf((_shot_time - 5.0) / 5.0, 0.0, 1.5))
+	var move_dt := dt * (1.0 + clampf((_shot_time - 3.5) / 4.0, 0.0, 2.0))
 	_launch_step(dt)
 	if _shot_time > RECALL_TIME:
 		for ball in balls:
