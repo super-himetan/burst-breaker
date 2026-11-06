@@ -1,7 +1,7 @@
 extends Node2D
 ## The game node's shared state, constants and drawing primitives.
 ## The game is one node built in layers, each only calling the layers beneath it:
-## game_base, game_audio, game_field, game_screens, game_effects, then main.gd on top.
+## game_base, game_audio, game_field, game_screens, game_effects, game_events, then main.gd.
 ## Rules live in sim/game_sim.gd and the screens outside the game in menus.gd.
 
 const GameSim := preload("res://sim/game_sim.gd")
