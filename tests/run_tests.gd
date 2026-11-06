@@ -88,6 +88,7 @@ func _init() -> void:
 	_test_gimmick_pieces()
 	_test_bonus_forge_and_sets()
 	_test_parts_mixed_and_honors()
+	_test_bundled_font_covers_the_text()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -2323,3 +2324,27 @@ func _autoplay(seed_value: int) -> Dictionary:
 			_:
 				break
 	return {"damage": sim.total_damage, "time": sim.sim_time}
+
+
+## The web build has no Japanese system font, so every character the game shows must be in the bundled one.
+func _test_bundled_font_covers_the_text() -> void:
+	var font: FontFile = load("res://fonts/NotoSansJP-Game.ttf")
+	var missing := {}
+	for path in _game_scripts("res://"):
+		var source := FileAccess.get_file_as_string(path)
+		for i in source.length():
+			var code := source.unicode_at(i)
+			if code > 0x7F and code != 0xFEFF and not font.has_char(code):
+				missing[char(code)] = true
+	_check(missing.is_empty(), "the bundled font has every character the game shows (missing: %s; run tools/subset_font.py)" % "".join(missing.keys()))
+
+
+func _game_scripts(dir: String) -> Array[String]:
+	var found: Array[String] = []
+	for sub in DirAccess.get_directories_at(dir):
+		if not sub.begins_with(".") and sub not in ["tests", "tools", "build", "verify-output"]:
+			found.append_array(_game_scripts(dir.path_join(sub)))
+	for file in DirAccess.get_files_at(dir):
+		if file.ends_with(".gd"):
+			found.append(dir.path_join(file))
+	return found

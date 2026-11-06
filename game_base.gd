@@ -31,6 +31,7 @@ const TAP_SLOP := 18.0
 const ACCEPT_INPUT_AFTER := 0.3
 const FONT_LATIN := ["Avenir Next", "Helvetica Neue", "Roboto", "sans-serif"]
 const FONT_JAPANESE := ["Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans CJK JP", "Noto Sans JP", "sans-serif"]
+const BUNDLED_FONT := preload("res://fonts/NotoSansJP-Game.ttf")
 const SAMPLE_RATE := 22050
 const BURST_WINDUP := 1.15
 const BURST_AFTERGLOW := 1.1
@@ -197,14 +198,18 @@ var verify_stats := {"max_balls": 0, "explosions": 0, "splits": 0}
 
 
 ## Latin text uses a clean geometric face, with Japanese falling back to a matching gothic.
+## The bundled font comes last, for platforms with no Japanese system font, such as the web.
 func _make_font(weight: int) -> Font:
 	var japanese := SystemFont.new()
 	japanese.font_names = PackedStringArray(FONT_JAPANESE)
 	japanese.font_weight = weight
+	var bundled := FontVariation.new()
+	bundled.base_font = BUNDLED_FONT
+	bundled.variation_opentype = {TextServerManager.get_primary_interface().name_to_tag("wght"): weight}
 	var latin := SystemFont.new()
 	latin.font_names = PackedStringArray(FONT_LATIN)
 	latin.font_weight = weight
-	latin.fallbacks = [japanese]
+	latin.fallbacks = [japanese, bundled]
 	return latin
 
 func t(key: String) -> String:
