@@ -49,6 +49,8 @@ var mastery := {}
 var pilot := "rookie"
 var contract := "none"
 var notes := 0
+var second_ball := ""
+var honor := "honor_rookie"
 var worn := {}
 var true_ending_seen := false
 ## New stars from the most recent run, for the results to announce.
@@ -101,6 +103,10 @@ func load_file() -> void:
 	var saved_contract := String(data.get("contract", contract))
 	contract = saved_contract if RunContent.CONTRACTS.has(saved_contract) else "none"
 	notes = clampi(int(data.get("notes", notes)), 0, NOTE_COUNT)
+	var saved_second := String(data.get("second_ball", second_ball))
+	second_ball = saved_second if Balls.BALLS.has(saved_second) else ""
+	var saved_honor := String(data.get("honor", honor))
+	honor = saved_honor if RunContent.HONORS.has(saved_honor) else "honor_rookie"
 	true_ending_seen = bool(data.get("true_ending_seen", true_ending_seen))
 	worn = {}
 	var saved_worn: Variant = data.get("worn", {})
@@ -181,6 +187,8 @@ func save_file() -> bool:
 		"pilot": pilot,
 		"contract": contract,
 		"notes": notes,
+		"second_ball": second_ball,
+		"honor": honor,
 		"worn": worn,
 		"true_ending_seen": true_ending_seen,
 	}, "  "))
@@ -209,6 +217,7 @@ func run_config(emit_events := true) -> Dictionary:
 		"missions": true,
 		"pilot": pilot,
 		"contract": contract,
+		"second_ball": second_ball if second_ball != ball_type else "",
 		"emit_events": emit_events,
 	}
 
@@ -294,6 +303,34 @@ func cycle_pilot() -> void:
 		index = (index + 1) % ids.size()
 		if is_pilot_unlocked(ids[index]):
 			pilot = ids[index]
+			return
+
+
+func can_mix_balls() -> bool:
+	return wins > 0
+
+
+## Steps through no second ball, then every unlocked ball other than the main one.
+func cycle_second_ball() -> void:
+	var options: Array[String] = [""]
+	for id in Balls.ids():
+		if id != ball_type and is_ball_unlocked(id):
+			options.append(id)
+	second_ball = options[(options.find(second_ball) + 1) % options.size()]
+
+
+func is_honor_unlocked(id: String) -> bool:
+	var unlock := String(RunContent.HONORS[id])
+	return unlock == "" or has_achievement(unlock)
+
+
+func cycle_honor() -> void:
+	var ids := RunContent.ids_of(RunContent.HONORS)
+	var index := ids.find(honor)
+	for i in ids.size():
+		index = (index + 1) % ids.size()
+		if is_honor_unlocked(ids[index]):
+			honor = ids[index]
 			return
 
 

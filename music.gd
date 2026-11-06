@@ -21,28 +21,61 @@ static func step_samples() -> int:
 	return roundi(SAMPLE_RATE * 60.0 / BPM / 4.0)
 
 
-## 16-bit mono PCM for one seamless loop.
+## 16-bit mono PCM for one seamless loop, every layer mixed.
 static func render_pcm() -> PackedByteArray:
+	var layers := _render_layers()
+	var mix := PackedFloat32Array()
+	mix.resize(layers[0].size())
+	for layer in layers:
+		for i in layer.size():
+			mix[i] += layer[i]
+	return _to_pcm(mix, _loudness(mix))
+
+
+## The loop split into three layers that play together and fade in separately:
+## 0 the bass, beat and tune, 1 the arpeggio, 2 the hats that come in with intensity.
+## They share one volume scale, so their sum never clips.
+static func render_layers() -> Array[PackedByteArray]:
+	var layers := _render_layers()
+	var mix := PackedFloat32Array()
+	mix.resize(layers[0].size())
+	for layer in layers:
+		for i in layer.size():
+			mix[i] += layer[i]
+	var loudest := _loudness(mix)
+	var result: Array[PackedByteArray] = []
+	for layer in layers:
+		result.append(_to_pcm(layer, loudest))
+	return result
+
+
+static func _render_layers() -> Array[PackedFloat32Array]:
 	var step := step_samples()
 	var total := step * STEPS_PER_BAR * CHORDS.size()
-	var mix := PackedFloat32Array()
-	mix.resize(total)
+	var base := PackedFloat32Array()
+	base.resize(total)
+	var arp := PackedFloat32Array()
+	arp.resize(total)
+	var hats := PackedFloat32Array()
+	hats.resize(total)
 	for bar in CHORDS.size():
 		var root: int = CHORDS[bar][0]
 		var third := 3 if CHORDS[bar][1] else 4
 		var tones: Array[int] = [root + 12, root + 12 + third, root + 19, root + 24]
 		for s in STEPS_PER_BAR:
 			var at := (bar * STEPS_PER_BAR + s) * step
-			_note(mix, at, step * 2, _hz(tones[ARP[s]] + 12), 0.1, 0.5)
+			_note(arp, at, step * 2, _hz(tones[ARP[s]] + 12), 0.1, 0.5)
 			if BASS_STEPS.has(s):
-				_note(mix, at, step * 3, _hz(root), 0.34, 0.0)
+				_note(base, at, step * 3, _hz(root), 0.34, 0.0)
 			if s % 8 == 0:
-				_thump(mix, at, step * 2, 0.4)
-			if s % 8 == 4:
-				_hat(mix, at, step, 0.05, bar * STEPS_PER_BAR + s)
+				_thump(base, at, step * 2, 0.4)
+			if s % 2 == 1:
+				_hat(hats, at, step, 0.05 if s % 4 == 3 else 0.03, bar * STEPS_PER_BAR + s)
+			if s % 4 == 2:
+				_note(hats, at, step, _hz(tones[3] + 24), 0.05, 0.3)
 	for entry: Array in MELODY:
-		_note(mix, int(entry[0]) * step, step * 5, _hz(int(entry[1])), 0.16, 0.0)
-	return _to_pcm(mix)
+		_note(base, int(entry[0]) * step, step * 5, _hz(int(entry[1])), 0.16, 0.0)
+	return [base, arp, hats] as Array[PackedFloat32Array]
 
 
 static func _hz(midi: int) -> float:
@@ -81,10 +114,14 @@ static func _hat(mix: PackedFloat32Array, start: int, length: int, volume: float
 		last = noise
 
 
-static func _to_pcm(mix: PackedFloat32Array) -> PackedByteArray:
+static func _loudness(mix: PackedFloat32Array) -> float:
 	var loudest := 0.001
 	for value in mix:
 		loudest = maxf(loudest, absf(value))
+	return loudest
+
+
+static func _to_pcm(mix: PackedFloat32Array, loudest: float) -> PackedByteArray:
 	var scale := PEAK / loudest
 	var pcm := PackedByteArray()
 	pcm.resize(mix.size() * 2)

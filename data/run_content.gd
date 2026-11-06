@@ -11,7 +11,13 @@ const ROUTES := {
 	"merchant": {"glyph": "coin", "color": "ffd84d", "weight": 2.0},
 	"shrine": {"glyph": "crown", "color": "8be9fd", "weight": 2.0},
 	"treasure": {"glyph": "chest", "color": "ffd166", "weight": 1.0},
+	"bonus": {"glyph": "coin_stack", "color": "ffd166", "weight": 1.5},
+	"forge": {"glyph": "hammer", "color": "ff9a3d", "weight": 1.5},
 }
+## A bonus stage: a sky of coin blocks and a few shots to break them.
+const BONUS_SHOTS := 3
+const BONUS_COINS := 2.0
+const FORGE_OFFERS := 3
 ## The danger route: the next stage is tougher, and pays for it.
 const DANGER_HP := 1.35
 const DANGER_COINS := 2.0
@@ -32,6 +38,29 @@ const RELICS := {
 	"r_prism": {"glyph": "fork", "add": {"split_chance": 0.2, "split_damage": 0.3}},
 	"r_heart": {"glyph": "shield", "add": {"guards": 1.0}},
 	"r_compass": {"glyph": "crosshair", "add": {"homing_chance": 0.3}},
+}
+
+## Owning every relic in a set adds its bonus on top.
+const RELIC_SETS := {
+	"set_blast": {"relics": ["r_powder", "r_prism"], "add": {"cluster": 1.0}},
+	"set_hunt": {"relics": ["r_fang", "r_mask"], "add": {"boss_damage": 0.5, "first_strike": 1.0}},
+	"set_alchemy": {"relics": ["r_cauldron", "r_powder"], "add": {"blast_poison": 2.0}},
+	"set_wind": {"relics": ["r_feather", "r_compass"], "add": {"homing_chance": 0.3, "wall_damage": 2.0}},
+	"set_fortune": {"relics": ["r_magnet", "r_lens"], "add": {"coin_pct": 0.5, "crit_chance": 0.1}},
+	"set_bastion": {"relics": ["r_heart", "r_clock"], "add": {"guards": 1.0, "stall": 1.0}},
+}
+
+## Titles shown under the logo, earned through achievements.
+const HONORS := {
+	"honor_rookie": "",
+	"honor_breaker": "wins_1",
+	"honor_slayer": "bosses_3",
+	"honor_chain": "best_combo_4",
+	"honor_alchemist": "poison_damage_3",
+	"honor_tycoon": "coins_5",
+	"honor_scholar": "perks_seen_5",
+	"honor_rusher": "rush_clears_1",
+	"honor_origin": "boss_origin_1",
 }
 
 const SHRINES: Array[String] = ["offering", "gamble", "pact", "rest", "mirror"]

@@ -81,6 +81,19 @@ const JACKPOT_CHANCE := 0.05
 const JACKPOT_COINS := 25.0
 const NOTE_CHANCE := 0.6
 const ALLY_HP := 0.3
+## Stage conditions: wind pushes balls sideways, a gravity well bends them, fog hides colours.
+const MODIFIERS: Array[String] = ["wind", "fog", "gravity"]
+const MODIFIER_CHANCE := 0.3
+const WIND_FORCE := 260.0
+const GRAVITY_FORCE := 900.0
+const GRAVITY_REACH := 140.0
+const CHAIN_CHANCE := 0.3
+const LINK_SHARE := 0.5
+const PART_HP := 3.0
+const PART_BOSSES: Array[String] = ["dokan", "lumina", "zero", "hyoga", "chrono", "void", "origin"]
+const PART_POST := Vector2i(3, 1)
+const PART_BREAK_DAMAGE := 0.06
+const KEY_HITS := 3
 const ORIGIN_TRICKS := 3
 const BOSS_SIZE := Vector2i(3, 2)
 const BUMPER_RADIUS := 26.0
@@ -136,6 +149,7 @@ class Ball:
 	var ignore_id := -1
 	var ignore_t := 0.0
 	var portal_t := 0.0
+	var alt := false
 
 
 var state: int = State.AIM
@@ -152,6 +166,12 @@ var fever := false
 var true_path := false
 var rush: Array[String] = []
 var attack_element := ""
+var modifier := ""
+var wind := 0.0
+var well := Vector2.ZERO
+var bonus_shots := 0
+var second_ball := ""
+var _second_element := ""
 var route_options: Array[String] = []
 var event := {}
 var relics: Array[String] = []
@@ -250,6 +270,11 @@ func new_run(seed_value: int, config := {}) -> void:
 		rush.append(id)
 	fever = false
 	attack_element = String(Balls.BALLS.get(ball_type, {}).get("element", ""))
+	second_ball = String(config.get("second_ball", ""))
+	if not Balls.BALLS.has(second_ball) or second_ball == ball_type:
+		second_ball = ""
+	_second_element = String(Balls.BALLS[second_ball].get("element", "")) if second_ball != "" else ""
+	bonus_shots = 0
 	route_options = []
 	event = {}
 	relics = []
@@ -560,9 +585,71 @@ func choose_route(id: String) -> bool:
 		"treasure":
 			_grant_coins(RunContent.TREASURE_COINS * (stage + 1.0))
 			_open_relic_choice()
+		"bonus":
+			_start_bonus()
+		"forge":
+			_open_forge()
 		_:
 			_go_to_next_stage()
 	return true
+
+
+func _start_bonus() -> void:
+	blocks = {}
+	obstacles = {}
+	balls = []
+	modifier = ""
+	waves_left = 0
+	_formation_rows = []
+	bonus_shots = RunContent.BONUS_SHOTS
+	for row in 6:
+		for col in COLS:
+			if (col + row) % 2 == 0:
+				var cell := Vector2i(col, row)
+				var block := _new_block(_block_hp(float(stage_cfg()["hp_min"])), "coin", cell)
+				block["shape"] = "round"
+				blocks[cell] = block
+	state = State.AIM
+	_emit({"type": "bonus_start"})
+
+
+## Bonus stages have no threat: a few shots, then on to the next stage.
+func _bonus_turn() -> bool:
+	if bonus_shots <= 0:
+		return false
+	bonus_shots -= 1
+	if bonus_shots <= 0 or blocks.is_empty():
+		bonus_shots = 0
+		blocks = {}
+		_emit({"type": "bonus_end"})
+		_go_to_next_stage()
+	else:
+		state = State.AIM
+	return true
+
+
+func _open_forge() -> void:
+	var owned: Array[String] = []
+	for id in Perks.ids():
+		if int(levels[id]) > 0 and not Perks.is_evolution(id) and not Perks.is_curse(id):
+			owned.append(id)
+	var options: Array[Dictionary] = []
+	for i in mini(RunContent.FORGE_OFFERS, owned.size()):
+		options.append({"forge": owned.pop_at(_rng.randi_range(0, owned.size() - 1))})
+	_open_event("forge", options)
+
+
+## Melts a level of one perk down into a fresh perk at least as rare.
+func _reforge(id: String) -> void:
+	levels[id] = int(levels[id]) - 1
+	var rarity: int = Perks.PERKS[id]["rarity"]
+	var pool: Array[String] = []
+	for other in Perks.ids():
+		if other != id and _is_perk_available(other) and int(Perks.PERKS[other]["rarity"]) >= rarity:
+			pool.append(other)
+	_recompute_stats()
+	if not pool.is_empty():
+		_take_perk(pool[_rng.randi_range(0, pool.size() - 1)])
 
 
 func _open_event(kind: String, options: Array[Dictionary], extra := {}) -> void:
@@ -627,6 +714,8 @@ func choose_event(index: int) -> bool:
 		take_relic(option["relic"])
 	elif option.has("shrine"):
 		_resolve_shrine(option["shrine"], option["choice"])
+	elif option.has("forge"):
+		_reforge(option["forge"])
 	if event.get("kind") == "merchant":
 		(event["options"] as Array).remove_at(index)
 		if not (event["options"] as Array).is_empty():
@@ -649,10 +738,37 @@ func _take_perk(id: String) -> void:
 	_emit({"type": "perk_taken", "id": id})
 
 
+func completed_sets() -> Array[String]:
+	var done: Array[String] = []
+	for set_id: String in RunContent.RELIC_SETS:
+		var whole := true
+		for relic: String in RunContent.RELIC_SETS[set_id]["relics"]:
+			whole = whole and relics.has(relic)
+		if whole:
+			done.append(set_id)
+	return done
+
+
+## The set a relic would complete right now, for the choice screen to point out.
+func set_completed_by(id: String) -> String:
+	for set_id: String in RunContent.RELIC_SETS:
+		var parts: Array = RunContent.RELIC_SETS[set_id]["relics"]
+		if parts.has(id) and not completed_sets().has(set_id):
+			var missing := 0
+			for relic: String in parts:
+				missing += 0 if relics.has(relic) or relic == id else 1
+			if missing == 0:
+				return set_id
+	return ""
+
+
 func take_relic(id: String) -> void:
 	if relics.size() >= RunContent.MAX_RELICS or relics.has(id):
 		return
+	var completes := set_completed_by(id)
 	relics.append(id)
+	if completes != "":
+		_emit({"type": "relic_set", "id": completes})
 	_recompute_stats()
 	guards = maxi(guards + int(RunContent.RELICS[id]["add"].get("guards", 0.0)), 0)
 	_emit({"type": "relic", "id": id})
@@ -764,6 +880,13 @@ func _build_base_stats(config: Dictionary) -> Dictionary:
 	var ball: Dictionary = Balls.BALLS.get(ball_type, Balls.BALLS["normal"])
 	_add_stats(base, ball["add"], 1)
 	base["ball_count"] = float(ball["count"])
+	var second := String(config.get("second_ball", ""))
+	if Balls.BALLS.has(second) and second != ball_type:
+		# A second ball type brings half its strengths and half its count.
+		var other: Dictionary = Balls.BALLS[second]
+		for key: String in other["add"]:
+			base[key] = float(base.get(key, 0.0)) + float(other["add"][key]) * 0.5
+		base["ball_count"] = float(base["ball_count"]) + int(other["count"]) / 2
 	var mastery: int = config.get("mastery", 0)
 	_add_stats(base, ball["mastery"], mastery)
 	base["ball_count"] = float(base["ball_count"]) + mastery / Balls.MASTERY_BALL_EVERY
@@ -801,6 +924,8 @@ func _recompute_stats() -> void:
 			_add_stats(stats, Perks.PERKS[id]["add"], level)
 	for relic in relics:
 		_add_stats(stats, RunContent.RELICS[relic]["add"], 1)
+	for set_id in completed_sets():
+		_add_stats(stats, RunContent.RELIC_SETS[set_id]["add"], 1)
 	ball_count = maxi(int(stat("ball_count")), 1)
 	ball_radius = minf(BALL_RADIUS + stat("radius"), MAX_RADIUS)
 	ball_speed = BALL_SPEED * (1.0 + stat("speed_pct"))
@@ -836,6 +961,7 @@ func _start_stage() -> void:
 	_next_stage_hp = 1.0
 	_next_stage_coins = 1.0
 	_build_obstacles()
+	_roll_modifier()
 	_pending_blasts = []
 	_launch_left = 0
 	var cfg: Dictionary = stage_cfg()
@@ -853,6 +979,20 @@ func _start_stage() -> void:
 	_emit({"type": "stage_start", "stage": stage, "boss": cfg.has("boss"), "boss_id": boss_id()})
 
 
+func _roll_modifier() -> void:
+	modifier = ""
+	if stage == 0 or stage_cfg().has("boss") or not rush.is_empty() or _rng.randf() >= MODIFIER_CHANCE:
+		return
+	modifier = MODIFIERS[_rng.randi_range(0, MODIFIERS.size() - 1)]
+	wind = 1.0 if _rng.randf() < 0.5 else -1.0
+	var free: Array[Vector2i] = []
+	for y in range(7, 10):
+		for x in range(1, COLS - 1):
+			if not obstacles.has(Vector2i(x, y)):
+				free.append(Vector2i(x, y))
+	well = cell_rect(free[_rng.randi_range(0, free.size() - 1)]).get_center()
+
+
 func _build_obstacles() -> void:
 	obstacles = {}
 	var layouts := Layouts.for_stage(stage)
@@ -864,7 +1004,7 @@ func _build_obstacles() -> void:
 	var portal: Variant = null
 	for piece: Array in layout:
 		var cell := Vector2i(piece[1], piece[2])
-		var entry := {"kind": piece[0], "cell": cell, "dir": 1 if _rng.randf() < 0.5 else -1, "pulse": 0.0}
+		var entry := {"kind": piece[0], "cell": cell, "dir": 1 if _rng.randf() < 0.5 else -1, "pulse": 0.0, "open": false, "hits": KEY_HITS}
 		obstacles[cell] = entry
 		if piece[0] == "portal":
 			if portal == null:
@@ -901,6 +1041,18 @@ func boss_id() -> String:
 
 
 ## Bosses the player has not met yet come first, so the whole cast shows up quickly.
+## The part a boss's trick depends on. It rides beside the boss until it is broken.
+func _spawn_part(boss: Dictionary) -> void:
+	var cell: Vector2i = (boss["origin"] as Vector2i) + PART_POST
+	if cell.x >= COLS or blocks.has(cell):
+		return
+	var part := _new_block(_block_hp(float(stage_cfg()["hp_max"]) * PART_HP), "part", cell)
+	part["post"] = PART_POST
+	part["part_of"] = boss["boss_id"]
+	blocks[cell] = part
+	boss["part"] = part
+
+
 func pool_rolls(chance: float) -> bool:
 	return _rng.randf() < chance
 
@@ -955,6 +1107,7 @@ func _spawn_boss(cfg: Dictionary) -> void:
 	block["guard_wait"] = 0
 	block["aim_cols"] = []
 	block["veil"] = false
+	block["broken"] = false
 	block["reborn"] = false
 	boss_block = block
 	for y in BOSS_SIZE.y:
@@ -964,6 +1117,8 @@ func _spawn_boss(cfg: Dictionary) -> void:
 		_spawn_guards(block)
 	if partner != "":
 		_spawn_partner(block, partner, hp)
+	if PART_BOSSES.has(id):
+		_spawn_part(block)
 
 
 ## Whole pictures share an element, so a chapter's colours arrive in readable groups.
@@ -1000,6 +1155,30 @@ func _spawn_row(row: int) -> void:
 		if col == COLS / 2 and size == Vector2i.ONE and stage > 0 and rush.is_empty() and _rng.randf() < ELITE_CHANCE:
 			kind = "elite"
 		_place_formation_block(Vector2i(col, row), size, kind, entry, cfg)
+	_maybe_chain_row(row)
+
+
+## Ties a mirrored pair of plain blocks together: damage to one is shared with the other.
+func _maybe_chain_row(row: int) -> void:
+	if stage < 2 or _rng.randf() >= CHAIN_CHANCE:
+		return
+	for col in range(0, COLS / 2):
+		var a: Variant = blocks.get(Vector2i(col, row))
+		var b: Variant = blocks.get(Vector2i(COLS - 1 - col, row))
+		if a == null or b == null:
+			continue
+		if a["kind"] != "normal" or b["kind"] != "normal" or a["size"] != Vector2i.ONE or b["size"] != Vector2i.ONE:
+			continue
+		a["link"] = b["id"]
+		b["link"] = a["id"]
+		return
+
+
+func block_by_id(id: int) -> Variant:
+	for block in unique_blocks():
+		if int(block["id"]) == id:
+			return block
+	return null
 
 
 ## `origin` is the cell a pattern letter sits on, and a tall block grows upward from the row
@@ -1113,6 +1292,7 @@ func _launch_step(dt: float) -> void:
 	var ball := Ball.new()
 	ball.pos = Vector2(launch_x, LAUNCH_Y)
 	ball.vel = _launch_dir * ball_speed
+	ball.alt = second_ball != "" and _launch_left % 2 == 1
 	balls.append(ball)
 
 
@@ -1120,6 +1300,8 @@ func _launch_step(dt: float) -> void:
 func _move_ball(ball: Ball, dt: float) -> bool:
 	if ball.returning:
 		ball.vel = Vector2(0.0, ball_speed)
+	elif modifier == "wind" or modifier == "gravity":
+		ball.vel = (ball.vel + _field_force(ball.pos) * dt).normalized() * ball_speed
 	ball.pos += ball.vel * dt
 	if ball.ignore_t > 0.0:
 		ball.ignore_t -= dt
@@ -1156,6 +1338,15 @@ func _move_ball(ball: Ball, dt: float) -> bool:
 			ball.vel.y = sign_y * ball_speed * 0.12
 			ball.vel = ball.vel.normalized() * ball_speed
 	return false
+
+
+## Wind and gravity bend paths without changing speed, so shots stay the same length.
+func _field_force(p: Vector2) -> Vector2:
+	if modifier == "wind":
+		return Vector2(wind * WIND_FORCE, 0.0)
+	var toward := well - p
+	var distance := maxf(toward.length(), 1.0)
+	return toward / distance * GRAVITY_FORCE * clampf(GRAVITY_REACH / distance, 0.0, 2.0)
 
 
 func _try_rebound(ball: Ball) -> bool:
@@ -1302,7 +1493,7 @@ func _obstacle_near(p: Vector2) -> Array:
 ## Solid pieces stop the aiming line. Portals are holes, so it passes over them.
 func _obstacle_touches(p: Vector2) -> bool:
 	for entry: Dictionary in _obstacle_near(p):
-		if entry["kind"] != "portal" and not _obstacle_contact(entry, p).is_empty():
+		if entry["kind"] != "portal" and not entry.get("open", false) and not _obstacle_contact(entry, p).is_empty():
 			return true
 	return false
 
@@ -1332,6 +1523,8 @@ func _collide_obstacles(ball: Ball) -> void:
 		if entry["kind"] == "portal":
 			_try_portal(ball, entry)
 			continue
+		if entry.get("open", false):
+			continue
 		var contact := _obstacle_contact(entry, ball.pos)
 		if contact.is_empty() or ball.vel.dot(contact["normal"]) >= 0.0:
 			continue
@@ -1340,8 +1533,33 @@ func _collide_obstacles(ball: Ball) -> void:
 		entry["pulse"] = 1.0
 		# Every surface counts as a wall, so bounce builds get to enjoy these too.
 		_on_wall(ball, false)
-		if entry["kind"] == "bumper":
-			_emit({"type": "bumper", "pos": cell_rect(entry["cell"]).get_center()})
+		match String(entry["kind"]):
+			"bumper":
+				_emit({"type": "bumper", "pos": cell_rect(entry["cell"]).get_center()})
+			"switch":
+				_flip_gates(entry)
+			"key":
+				_hit_key(entry)
+
+
+## Every gate on the stage changes at once, so one hit can open the way or shut it again.
+func _flip_gates(switch_entry: Dictionary) -> void:
+	for other: Dictionary in obstacles.values():
+		if other["kind"] == "gate":
+			other["open"] = not other["open"]
+	_emit({"type": "switch", "pos": cell_rect(switch_entry["cell"]).get_center()})
+
+
+func _hit_key(key: Dictionary) -> void:
+	key["hits"] = int(key["hits"]) - 1
+	if int(key["hits"]) > 0:
+		return
+	var opened: Array[Vector2] = []
+	for cell: Vector2i in obstacles.keys():
+		if obstacles[cell]["kind"] == "door" or obstacles[cell] == key:
+			opened.append(cell_rect(cell).get_center())
+			obstacles.erase(cell)
+	_emit({"type": "unlock", "targets": opened})
 
 
 func _try_portal(ball: Ball, entry: Dictionary) -> void:
@@ -1413,7 +1631,12 @@ func _hit_block_with_ball(cell: Vector2i, block: Dictionary, ball: Ball) -> void
 		block["poison"] = int(block["poison"]) + poison
 	if stat("burn_pct") > 0.0:
 		block["burning"] = true
-	_damage_block(cell, _scale_damage(damage, block), {"crit": is_crit})
+	var own_element := attack_element
+	if ball.alt:
+		attack_element = _second_element
+	var scaled_damage := _scale_damage(damage, block)
+	attack_element = own_element
+	_damage_block(cell, scaled_damage, {"crit": is_crit})
 
 
 ## Multipliers shared by every damage source.
@@ -1506,6 +1729,10 @@ func _damage_block(cell: Vector2i, raw_damage: float, flags := {}) -> void:
 		"crit": flags.get("crit", false),
 		"dot": flags.get("dot", false),
 	})
+	if block.has("link") and not flags.get("linked", false):
+		var twin: Variant = block_by_id(int(block["link"]))
+		if twin != null:
+			_damage_block(twin["origin"], amount * LINK_SHARE, {"dot": true, "linked": true})
 	if int(block["hp"]) <= 0 and block["kind"] == "boss" and _try_rebirth(block):
 		return
 	if int(block["hp"]) <= 0:
@@ -1552,6 +1779,13 @@ func _kill_block(cell: Vector2i, block: Dictionary, flags: Dictionary, overkill 
 		counters["treasures"] += 1
 	if kind == "elite":
 		gained = ELITE_COINS * (stage + 1)
+	if kind == "coin":
+		gained = RunContent.BONUS_COINS * (stage + 1)
+	if block.has("part_of") and boss_block != null:
+		var owner: Dictionary = boss_block
+		owner["broken"] = true
+		owner["hp"] = maxi(int(owner["hp"]) - int(float(owner["max_hp"]) * PART_BREAK_DAMAGE), 1)
+		_emit({"type": "part_broken", "pos": block_rect(block).get_center(), "boss": owner["boss_id"]})
 	if kind == "bounty":
 		gained = BOUNTY_COINS * (stage + 1)
 		counters["bounties"] += 1
@@ -1702,6 +1936,8 @@ func _end_shot() -> void:
 	if _burst_shot:
 		_end_burst()
 		return
+	if _bonus_turn():
+		return
 	_apply_end_of_shot()
 	_rate_shot()
 	_check_missions()
@@ -1764,6 +2000,8 @@ func run_rank() -> int:
 func _end_burst() -> void:
 	_burst_shot = false
 	_emit({"type": "burst_end", "damage": shot_damage})
+	if _bonus_turn():
+		return
 	if _is_stage_finished():
 		_clear_stage()
 		return
@@ -1852,6 +2090,13 @@ func _descend() -> void:
 		for y in BOSS_SIZE.y:
 			for x in BOSS_SIZE.x:
 				moved[origin + Vector2i(x, y)] = boss
+		var part: Variant = boss.get("part")
+		if part != null and blocks.has((part as Dictionary)["origin"]) and blocks[(part as Dictionary)["origin"]]["id"] == part["id"]:
+			var post_cell: Vector2i = origin + PART_POST
+			if post_cell.x < COLS:
+				part["slid"] = post_cell.y != (part["origin"] as Vector2i).y
+				part["origin"] = post_cell
+				moved[post_cell] = part
 		# Bodyguards keep formation instead of drifting down with the rest.
 		for guard: Dictionary in _live_guards():
 			var post: Vector2i = origin + (guard["post"] as Vector2i)
@@ -2075,6 +2320,9 @@ func _boss_trick() -> void:
 	if boss_block == null:
 		return
 	var boss: Dictionary = boss_block
+	# With its part broken, a boss can no longer use its trick.
+	if boss.get("broken", false):
+		return
 	match boss["boss_id"]:
 		"gantetsu":
 			if _live_guards().is_empty():

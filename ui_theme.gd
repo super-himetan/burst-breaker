@@ -29,6 +29,8 @@ const BLOCKS := {
 	"boss": Color("b3183f"),
 	"elite": Color("ffd166"),
 	"bounty": Color("fff1a8"),
+	"coin": Color("ffd166"),
+	"part": Color("8da2c0"),
 }
 
 

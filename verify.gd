@@ -270,6 +270,7 @@ func _verify_specials() -> void:
 	_check("boss_kill_wipes_field", sim.blocks.is_empty())
 	await _wait_until(func() -> bool: return host.boss_down <= 0.0, 4000)
 	await _verify_obstacles(sim)
+	await _verify_gimmicks(sim)
 	await _verify_boss_cast(sim)
 	await _tap_button("pause")
 	if host.paused:
@@ -351,6 +352,42 @@ func _verify_extras(sim: GameSim) -> void:
 	await _shot("50_results_after_ending_ja")
 	await _tap_button("save_card")
 	await _tap_button("to_title")
+
+
+## The puzzle pieces and stage conditions, each on screen at least once.
+func _verify_gimmicks(sim: GameSim) -> void:
+	sim.state = GameSim.State.AIM
+	sim.stage = 5
+	sim._start_stage()
+	sim.obstacles = {}
+	for piece: Array in [["gate", 0, 7], ["gate", 1, 7], ["gate", 2, 7], ["wall", 3, 7], ["gate", 4, 7], ["gate", 5, 7], ["gate", 6, 7], ["switch", 1, 9], ["key", 5, 9], ["door", 4, 10]]:
+		var cell := Vector2i(piece[1], piece[2])
+		sim.obstacles[cell] = {"kind": piece[0], "cell": cell, "dir": 1, "pulse": 0.0, "open": false, "hits": GameSim.KEY_HITS}
+	sim.modifier = "gravity"
+	sim.well = sim.cell_rect(Vector2i(3, 9)).get_center()
+	var paired := 0
+	for block in sim.unique_blocks():
+		if block["kind"] == "normal" and block["size"] == Vector2i.ONE and paired == 0:
+			var twin: Variant = sim.blocks.get(Vector2i(GameSim.COLS - 1 - int(block["origin"].x), int(block["origin"].y)))
+			if twin != null and twin != block:
+				block["link"] = twin["id"]
+				twin["link"] = block["id"]
+				paired = 1
+	await _wait(0.3)
+	await _shot("12c_gimmicks_ja")
+	sim.modifier = "wind"
+	sim.wind = 1.0
+	await _wait(0.2)
+	await _shot("12d_wind_ja")
+	sim.modifier = "fog"
+	await _wait(0.2)
+	await _shot("12e_fog_ja")
+	sim.modifier = ""
+	sim.blocks = {}
+	sim._start_bonus()
+	await _wait(0.6)
+	await _shot("12f_bonus_ja")
+	_check("bonus_stage_draws", sim.bonus_shots > 0)
 
 
 func _verify_boss_cast(sim: GameSim) -> void:

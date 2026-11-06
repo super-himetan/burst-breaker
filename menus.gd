@@ -26,7 +26,7 @@ const ROW_GAP := 12.0
 const SHOP_ROW_H := 118.0
 const ACHIEVEMENT_ROW_H := 98.0
 const CODEX_ROW_H := 110.0
-const BLOCK_KINDS: Array[String] = ["normal", "round", "hex", "diamond", "tri_up", "pill", "big", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss", "wall", "mover", "ramp_l", "bumper", "portal"]
+const BLOCK_KINDS: Array[String] = ["normal", "round", "hex", "diamond", "tri_up", "pill", "big", "elite", "coin", "bounty", "part", "bomb", "shield", "regen", "armor", "treasure", "breeder", "extra_ball", "boss", "wall", "mover", "ramp_l", "bumper", "portal", "gate", "switch", "door", "key"]
 const CODEX_TABS: Array[String] = ["perks", "balls", "blocks", "bosses", "notes"]
 const BOSS_SILHOUETTE := Color(0.0, 0.0, 0.0, 0.45)
 const COSMETIC_ROW_H := 84.0
@@ -136,6 +136,7 @@ func buttons(screen: int) -> Array[Dictionary]:
 	var list: Array[Dictionary] = []
 	match screen:
 		Screen.TITLE:
+			list.append(_button("honor", Rect2(170.0, 362.0, 380.0, 48.0), t(save.honor), "small"))
 			list.append(_button("start", Rect2(70.0, 570.0, 580.0, 140.0), t("start"), "primary"))
 			var grid: Array[String] = ["shop", "stars", "achievements", "codex", "howto", "settings"]
 			for i in grid.size():
@@ -164,8 +165,10 @@ func buttons(screen: int) -> Array[Dictionary]:
 			list.append(_button("cosmetics", Rect2(50.0, 40.0, 150.0, 66.0), t("cosmetics"), "small"))
 			if save.can_rush():
 				list.append(_button("rush", Rect2(520.0, 40.0, 150.0, 66.0), t("rush"), "small"))
-			list.append(_button("pilot", Rect2(50.0, 866.0, 305.0, 84.0), t("pilot_" + String(save.pilot))))
-			list.append(_button("contract", Rect2(365.0, 866.0, 305.0, 84.0), t("contract_" + String(save.contract)), "normal" if int(save.wins) > 0 else "disabled"))
+			list.append(_button("pilot", Rect2(50.0, 866.0, 200.0, 84.0), t("pilot_" + String(save.pilot))))
+			var second_label: String = t("second_none") if save.second_ball == "" else "+ " + t("ball_" + String(save.second_ball))
+			list.append(_button("second", Rect2(260.0, 866.0, 200.0, 84.0), second_label, "normal" if save.can_mix_balls() else "disabled"))
+			list.append(_button("contract", Rect2(470.0, 866.0, 200.0, 84.0), t("contract_" + String(save.contract)), "normal" if int(save.wins) > 0 else "disabled"))
 			list.append(_button("go", Rect2(90.0, 1000.0, 540.0, 110.0), t("go"), "primary"))
 			list.append(_button("back", Rect2(180.0, 1128.0, 360.0, 84.0), t("back")))
 		Screen.SHOP:
@@ -226,6 +229,13 @@ func press(id: String) -> bool:
 	match id:
 		"pilot":
 			save.cycle_pilot()
+			save.save_file()
+		"second":
+			if save.can_mix_balls():
+				save.cycle_second_ball()
+				save.save_file()
+		"honor":
+			save.cycle_honor()
 			save.save_file()
 		"contract":
 			if int(save.wins) > 0:
@@ -477,7 +487,25 @@ func _wallet_line(y: float) -> void:
 		host.text_left(Vector2(x + 34.0 + coins_w + 40.0, y), stars_text, 26, UI.STAR)
 
 
+## The workshop town on the horizon grows with everything the player has achieved.
+func _draw_town() -> void:
+	var buildings := clampi(3 + int(save.achievements.size()) / 6, 3, 24)
+	var lit_share := clampf(float(save.achievements.size()) / 150.0, 0.1, 1.0)
+	for i in buildings:
+		var width := 40.0 + float((i * 53) % 37)
+		var height := 70.0 + float((i * 97) % 160)
+		var x := fmod(i * 131.0, BASE_W + 60.0) - 30.0
+		var rect := Rect2(x, BASE_H - height, width, height)
+		host.panel(rect, Color(0.07, 0.05, 0.16, 0.9), 4.0)
+		var windows := int(height / 26.0)
+		for w in windows:
+			var lit := fmod(float(i * 7 + w * 3) * 0.37, 1.0) < lit_share
+			if lit:
+				host.panel(Rect2(rect.position + Vector2(width / 2.0 - 5.0, 12.0 + w * 26.0), Vector2(10.0, 12.0)), Color(UI.GOLD, 0.55), 2.0)
+
+
 func _draw_title() -> void:
+	_draw_town()
 	# Soft floating blocks keep the title alive without any art assets.
 	var time: float = host.time
 	for i in 12:

@@ -84,6 +84,10 @@ func _init() -> void:
 	_test_world_and_specials()
 	_test_endgame()
 	_test_cosmetics_and_notes()
+	_test_stage_conditions()
+	_test_gimmick_pieces()
+	_test_bonus_forge_and_sets()
+	_test_parts_mixed_and_honors()
 	print("FAILURES: %d" % failures)
 	quit(1 if failures > 0 else 0)
 
@@ -1550,20 +1554,35 @@ func _test_layouts_leave_a_route() -> void:
 	_check(portals_ok, "portals come in pairs, and furniture stays below the starting rows")
 
 
+## Doors count as open only if the key can be reached first; gates only if a switch can.
 func _layout_has_route(layout: Array) -> bool:
 	var solid := {}
 	for piece: Array in layout:
-		if piece[0] != "portal" and piece[0] != "bumper":
+		if not piece[0] in ["portal", "bumper", "door", "gate", "key", "switch"]:
 			solid[Vector2i(piece[1], piece[2])] = true
+	for piece: Array in layout:
+		if piece[0] in ["key", "switch"] and not _reaches(solid, Vector2i(piece[1], piece[2]), layout):
+			return false
+	return _reaches(solid, Vector2i(-1, 0), layout)
+
+
+func _reaches(solid: Dictionary, goal: Vector2i, layout: Array) -> bool:
+	var blocked := solid.duplicate()
+	if goal.x >= 0:
+		# On the way to a key or switch, everything it controls is still shut.
+		for piece: Array in layout:
+			if piece[0] in ["door", "gate"]:
+				blocked[Vector2i(piece[1], piece[2])] = true
+	var solid_now := blocked
 	var open: Array[Vector2i] = []
 	var seen := {}
 	for x in GameSim.COLS:
 		open.append(Vector2i(x, GameSim.DEATH_ROW))
 	while not open.is_empty():
 		var cell: Vector2i = open.pop_back()
-		if seen.has(cell) or solid.has(cell) or cell.x < 0 or cell.x >= GameSim.COLS or cell.y > GameSim.DEATH_ROW:
+		if seen.has(cell) or solid_now.has(cell) or cell.x < 0 or cell.x >= GameSim.COLS or cell.y > GameSim.DEATH_ROW:
 			continue
-		if cell.y == 0:
+		if (goal.x < 0 and cell.y == 0) or (goal.x >= 0 and cell.distance_to(goal) <= 1.0):
 			return true
 		seen[cell] = true
 		for side in [Vector2i.UP, Vector2i.LEFT, Vector2i.RIGHT, Vector2i.DOWN]:
@@ -2075,6 +2094,187 @@ func _test_cosmetics_and_notes() -> void:
 	loaded.load_file()
 	_check(loaded.wearing("skin") == "skin_gold" and loaded.notes == 3, "looks and notes survive a reload")
 	DirAccess.remove_absolute(path)
+
+
+func _test_stage_conditions() -> void:
+	var seen := {}
+	for seed_value in 80:
+		var s := _sim(seed_value)
+		s.stage = 4
+		s._start_stage()
+		seen[s.modifier] = true
+	_check(seen.size() == GameSim.MODIFIERS.size() + 1, "stages roll every condition, and none at all %s" % str(seen.keys()))
+	var windy := _sim()
+	windy.modifier = "wind"
+	windy.wind = 1.0
+	var ball := _ball()
+	ball.pos = Vector2(360.0, 700.0)
+	ball.vel = Vector2(0.0, -windy.ball_speed)
+	for i in 30:
+		windy._move_ball(ball, 1.0 / 120.0)
+	_check(ball.vel.x > 1.0 and is_equal_approx(ball.vel.length(), windy.ball_speed), "wind pushes a ball without changing its speed")
+	var heavy := _sim()
+	heavy.modifier = "gravity"
+	heavy.well = Vector2(500.0, 600.0)
+	var pulled := _ball()
+	pulled.pos = Vector2(360.0, 700.0)
+	pulled.vel = Vector2(0.0, -heavy.ball_speed)
+	for i in 30:
+		heavy._move_ball(pulled, 1.0 / 120.0)
+	_check(pulled.vel.x > 1.0, "a gravity well bends a ball toward it")
+	var first := _sim(3)
+	_check(first.modifier == "", "the first stage is always plain")
+
+
+func _test_gimmick_pieces() -> void:
+	var sim := _sim()
+	var gate_cell := Vector2i(3, 7)
+	sim.obstacles = {
+		gate_cell: {"kind": "gate", "cell": gate_cell, "dir": 1, "pulse": 0.0, "open": false, "hits": 3},
+		Vector2i(1, 9): {"kind": "switch", "cell": Vector2i(1, 9), "dir": 1, "pulse": 0.0, "open": false, "hits": 3},
+	}
+	var blocked := _ball()
+	blocked.pos = sim.cell_rect(gate_cell).get_center() + Vector2(0.0, 36.0)
+	blocked.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(blocked)
+	_check(blocked.vel.y > 0.0, "a shut gate stops the ball")
+	var flip := _ball()
+	flip.pos = sim.cell_rect(Vector2i(1, 9)).get_center() + Vector2(0.0, 30.0)
+	flip.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(flip)
+	_check(sim.obstacles[gate_cell]["open"], "hitting a switch opens the gates")
+	var through := _ball()
+	through.pos = sim.cell_rect(gate_cell).get_center() + Vector2(0.0, 36.0)
+	through.vel = Vector2(0.0, -sim.ball_speed)
+	sim._collide_obstacles(through)
+	_check(through.vel.y < 0.0, "an open gate lets the ball through")
+
+	sim = _sim()
+	sim.obstacles = {Vector2i(3, 9): {"kind": "key", "cell": Vector2i(3, 9), "dir": 1, "pulse": 0.0, "open": false, "hits": GameSim.KEY_HITS}}
+	for x in GameSim.COLS:
+		sim.obstacles[Vector2i(x, 7)] = {"kind": "door", "cell": Vector2i(x, 7), "dir": 1, "pulse": 0.0, "open": false, "hits": 3}
+	for i in GameSim.KEY_HITS:
+		var hit := _ball()
+		hit.pos = sim.cell_rect(Vector2i(3, 9)).get_center() + Vector2(0.0, 36.0)
+		hit.vel = Vector2(0.0, -sim.ball_speed)
+		sim._collide_obstacles(hit)
+	_check(sim.obstacles.is_empty(), "breaking the key removes the key and every door")
+
+	sim = _sim()
+	sim.stage = 4
+	var linked := false
+	for seed_value in 40:
+		var s := _sim(seed_value)
+		s.stage = 4
+		s._start_stage()
+		for block in s.unique_blocks():
+			if block.has("link"):
+				linked = true
+				var twin: Dictionary = s.block_by_id(int(block["link"]))
+				var twin_hp := int(twin["hp"])
+				s._damage_block(block["origin"], 10.0)
+				_check(twin_hp - int(twin["hp"]) == 5, "a chained block shares half its damage")
+				break
+		if linked:
+			break
+	_check(linked, "later stages tie some blocks together")
+
+
+func _test_bonus_forge_and_sets() -> void:
+	var sim := _route_sim()
+	sim.choose_upgrade("split")
+	sim.route_options = ["bonus", "battle"] as Array[String]
+	var stage_before := sim.stage
+	sim.choose_route("bonus")
+	_check(sim.state == GameSim.State.AIM and sim.bonus_shots == RunContent.BONUS_SHOTS and sim.stage == stage_before, "the bonus stage starts with its shots")
+	var coins_before := sim.coins
+	sim._damage_block(sim.blocks.keys()[0], 1.0e6)
+	_check(sim.coins > coins_before, "coin blocks pay out")
+	for i in RunContent.BONUS_SHOTS:
+		sim.state = GameSim.State.SHOOT
+		sim._end_shot()
+	_check(sim.stage == stage_before + 1 and sim.bonus_shots == 0 and sim.state == GameSim.State.AIM, "after its shots the bonus stage moves on")
+
+	sim = _route_sim()
+	sim.choose_upgrade("split")
+	sim.levels["bomb"] = 2
+	sim.route_options = ["forge", "battle"] as Array[String]
+	sim.choose_route("forge")
+	_check(sim.event["kind"] == "forge", "the forge opens")
+	var melted: String = sim.event["options"][0]["forge"]
+	var before := int(sim.levels[melted])
+	var total_before := 0
+	for id in Perks.ids():
+		total_before += int(sim.levels[id])
+	sim.choose_event(0)
+	var total_after := 0
+	for id in Perks.ids():
+		total_after += int(sim.levels[id])
+	_check(int(sim.levels[melted]) == before - 1 and total_after == total_before, "reforging trades one level for another")
+
+	sim = _sim()
+	sim.take_relic("r_powder")
+	_check(sim.set_completed_by("r_prism") == "set_blast", "the choice screen can tell a relic completes a set")
+	var cluster_before := sim.stat("cluster")
+	sim.take_relic("r_prism")
+	_check(sim.completed_sets().has("set_blast") and sim.stat("cluster") > cluster_before, "a full set adds its bonus")
+	var text_ok := true
+	for lang in I18n.LANGS:
+		for set_id: String in RunContent.RELIC_SETS:
+			text_ok = text_ok and I18n.TEXT[lang].has(set_id)
+			for relic: String in RunContent.RELIC_SETS[set_id]["relics"]:
+				text_ok = text_ok and RunContent.RELICS.has(relic)
+	_check(text_ok, "sets name real relics and have text")
+
+
+func _test_parts_mixed_and_honors() -> void:
+	var sim := _boss_sim("dokan", 7)
+	var boss: Dictionary = sim.boss_block
+	var part: Dictionary = boss["part"]
+	_check(sim.blocks.has(part["origin"]), "a boss with a part brings it into the fight")
+	for turn in 3:
+		sim._descend()
+	_check_board_valid(sim, "a boss part keeps the board valid")
+	_check(part["origin"] == (boss["origin"] as Vector2i) + GameSim.PART_POST, "the part rides with the boss")
+	var hp_before := int(boss["hp"])
+	sim._damage_block(part["origin"], 1.0e9)
+	_check(boss["broken"] and int(boss["hp"]) < hp_before, "breaking the part hurts the boss and breaks its trick")
+	var count_before := sim.unique_blocks().size()
+	sim._boss_trick()
+	_check(sim.unique_blocks().size() == count_before, "a broken boss throws nothing")
+	var mixed := _sim(1, {"ball_type": "normal", "second_ball": "fire"})
+	var single := _sim(1, {"ball_type": "normal"})
+	_check(mixed.ball_count == single.ball_count + int(Balls.BALLS["fire"]["count"]) / 2 and mixed.stat("poison") > 0.0, "a second ball adds half its count and strengths")
+	mixed.fire(Vector2.UP)
+	for i in 30:
+		mixed.step(1.0 / 60.0)
+	var alts := 0
+	for ball in mixed.balls:
+		alts += 1 if ball.alt else 0
+	_check(alts > 0 and alts < mixed.balls.size(), "mixed shots alternate their balls")
+	var same := _sim(1, {"ball_type": "fire", "second_ball": "fire"})
+	_check(same.second_ball == "", "a ball cannot be its own second")
+	var save := SaveData.new(_temp_save_path("honors"))
+	save.cycle_honor()
+	_check(save.honor == "honor_rookie", "locked titles are skipped")
+	save.achievements["wins_1"] = true
+	save.cycle_honor()
+	_check(save.honor == "honor_breaker", "an earned title can be shown")
+	var ids := {}
+	for entry in Achievements.all():
+		ids[entry["id"]] = true
+	var ok := true
+	for honor: String in RunContent.HONORS:
+		var unlock := String(RunContent.HONORS[honor])
+		ok = ok and (unlock == "" or ids.has(unlock))
+		for lang in I18n.LANGS:
+			ok = ok and I18n.TEXT[lang].has(honor)
+	_check(ok, "titles have text and real unlocks")
+	var layers := Music.render_layers()
+	var same_length := true
+	for layer in layers:
+		same_length = same_length and layer.size() == layers[0].size()
+	_check(layers.size() == 3 and same_length, "the music has three layers of equal length")
 
 
 func _test_next_unlock() -> void:

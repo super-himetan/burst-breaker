@@ -51,6 +51,7 @@ const REVEAL_SECONDS := 0.5
 const COMBO_STAGES: Array[int] = [100, 300, 1000]
 const ENDING_LINE_SECONDS := 2.6
 const STAGE_SKY_SHIFT := 0.035
+const WORLD_PITCH := {"wall": 1.0, "desert": 0.94, "glacier": 1.06, "cosmos": 0.9}
 const BALL_GLYPHS := {"normal": "star", "iron": "hammer", "fire": "flame", "splitter": "fork", "blaster": "bomb", "ghost": "crosshair", "lucky": "clover", "titan": "big_ball"}
 const KIND_BORDER := 4
 const CARD_PATH_WIDTH := 96.0
@@ -165,9 +166,9 @@ var _pending_dots: Array[Dictionary] = []
 var sounds := {}
 var players: Array[AudioStreamPlayer] = []
 var next_player := 0
-var music_player: AudioStreamPlayer
+var music_players: Array[AudioStreamPlayer] = []
 var music_task := -1
-var music_pcm := PackedByteArray()
+var music_layers: Array[PackedByteArray] = []
 var end_age := 0.0
 var wipe := 0.0
 var fever_glow := 0.0
@@ -220,7 +221,7 @@ func _ready() -> void:
 	menus = Menus.new(self, save)
 	_apply_sound()
 	# Rendering the loop takes a moment, so it must not hold up the first frame.
-	music_task = WorkerThreadPool.add_task(func() -> void: music_pcm = Music.render_pcm())
+	music_task = WorkerThreadPool.add_task(func() -> void: music_layers = Music.render_layers())
 	sim = GameSim.new()
 	_recover_interrupted_run()
 	if verify_dir != "":
@@ -529,9 +530,41 @@ func _apply_sound() -> void:
 
 
 func _apply_music() -> void:
-	music_player.volume_db = MUSIC_VOLUME_DB + _volume_db(save.music_volume)
-	if music_player.stream != null:
-		music_player.stream_paused = save.music_volume <= 0
+	for player in music_players:
+		if player.stream != null:
+			player.stream_paused = save.music_volume <= 0
+
+
+## The base layer always plays; the others fade in with the game and with its intensity.
+func _mix_music(delta: float) -> void:
+	if music_players.is_empty() or music_players[0].stream == null:
+		return
+	var in_game := screen == Menus.Screen.GAME and not paused
+	var intensity := clampf(heat * 1.4 + fever_glow + (0.6 if in_game and sim.boss_block != null else 0.0), 0.0, 1.0)
+	var targets := [1.0, 1.0 if in_game else 0.35, intensity if in_game else 0.0]
+	var base_db := MUSIC_VOLUME_DB + _volume_db(save.music_volume)
+	for i in music_players.size():
+		var current := db_to_linear(music_players[i].volume_db - base_db)
+		var next := move_toward(current, float(targets[i]), delta * 1.5)
+		music_players[i].volume_db = base_db + linear_to_db(maxf(next, 0.0001))
+		music_players[i].pitch_scale = WORLD_PITCH.get(sim.world if in_game else "wall", 1.0)
+
+
+## Starts the layers together once the background render has finished.
+func _poll_music() -> void:
+	if music_task < 0 or not WorkerThreadPool.is_task_completed(music_task):
+		return
+	WorkerThreadPool.wait_for_task_completion(music_task)
+	music_task = -1
+	for i in music_layers.size():
+		var stream := _wav(music_layers[i])
+		stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		stream.loop_end = music_layers[i].size() / 2
+		music_players[i].stream = stream
+		music_players[i].volume_db = MUSIC_VOLUME_DB + _volume_db(save.music_volume) + (0.0 if i == 0 else -60.0)
+	for player in music_players:
+		player.play()
+	_apply_music()
 
 
 func _volume_db(volume: int) -> float:
@@ -551,19 +584,6 @@ func _change_volume(id: String) -> void:
 
 
 ## Starts the loop once the background render has finished.
-func _poll_music() -> void:
-	if music_task < 0 or not WorkerThreadPool.is_task_completed(music_task):
-		return
-	WorkerThreadPool.wait_for_task_completion(music_task)
-	music_task = -1
-	var stream := _wav(music_pcm)
-	stream.loop_mode = AudioStreamWAV.LOOP_FORWARD
-	stream.loop_end = music_pcm.size() / 2
-	music_player.stream = stream
-	music_player.play()
-	_apply_music()
-
-
 func _exit_tree() -> void:
 	if music_task >= 0:
 		WorkerThreadPool.wait_for_task_completion(music_task)
@@ -572,6 +592,7 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
 	time += delta
 	_poll_music()
+	_mix_music(delta)
 	wipe = maxf(wipe - delta, 0.0)
 	ending_age += delta
 	fever_glow = move_toward(fever_glow, 1.0 if screen == Menus.Screen.GAME and sim.fever and sim.state == GameSim.State.SHOOT else 0.0, delta * 3.0)
@@ -1195,6 +1216,26 @@ func _consume_events() -> void:
 				_spawn_particles(e["pos"], UI.BLOCKS["breeder"], 8, 180.0)
 			"companion":
 				_play("pick", 2.0)
+			"switch":
+				_play("pick", 0.8)
+				_spawn_particles(e["pos"], UI.MINT, 10, 260.0)
+			"unlock":
+				_show_banner(t("unlock_banner"), 1.0)
+				_play("win", 1.4)
+				for p: Vector2 in e["targets"]:
+					_spawn_particles(p, UI.GOLD, 10, 360.0)
+			"part_broken":
+				_show_banner(t("part_banner"), 1.0)
+				_play("boom", 0.9)
+				trauma = minf(trauma + 0.6, 1.0)
+				_spawn_particles(e["pos"], UI.BLOCKS["part"], 40, 700.0)
+			"relic_set":
+				toasts.append({"text": t("set_toast") % t(String(e["id"])), "t": 0.0})
+				_play("win", 1.8)
+			"bonus_start":
+				_show_banner(t("bonus_banner"), 1.0)
+			"bonus_end":
+				_play("win", 1.3)
 			"relic":
 				toasts.append({"text": t("relic_toast") % t("relic_" + String(e["id"])), "t": 0.0})
 				_play("win", 1.5)
@@ -1238,6 +1279,9 @@ func _consume_events() -> void:
 			"stage_start":
 				tension_left = TENSION_SECONDS
 				_apply_sky()
+				if sim.modifier != "" and int(e["stage"]) > 0:
+					_show_banner(t("modifier_" + sim.modifier), 1.0)
+					continue
 				if int(e["stage"]) == 0 and not e["boss"] and sim.world != "wall":
 					_show_banner(t("world_" + sim.world), 1.2)
 					continue
@@ -1511,7 +1555,10 @@ func _draw() -> void:
 	_draw_danger_line()
 	_draw_laser_warning()
 	_draw_obstacles()
+	_draw_field_force()
 	_draw_blocks()
+	_draw_chains()
+	_draw_fog()
 	_draw_boss_down()
 	_draw_boss_crack()
 	_draw_balls()
@@ -1933,16 +1980,86 @@ func _draw_burst_cut_in() -> void:
 		PerkArt.draw_glyph(canvas, BALL_GLYPHS[sim.ball_type], emblem, 18.0, Color(UI.INK, 0.45))
 
 
+func _draw_field_force() -> void:
+	match sim.modifier:
+		"wind":
+			for i in 14:
+				var y := GameSim.FIELD_Y + 40.0 + i * 62.0
+				var x := fmod(time * 260.0 * sim.wind + i * 173.0, GameSim.FIELD_W)
+				if x < 0.0:
+					x += GameSim.FIELD_W
+				var at := Vector2(GameSim.FIELD_X + x, y)
+				canvas.draw_line(at, at + Vector2(-46.0 * sim.wind, 0.0), Color(1.0, 1.0, 1.0, 0.12), 3.0, true)
+		"gravity":
+			for i in 4:
+				var r := fmod(time * 40.0 + i * 30.0, 120.0)
+				canvas.draw_arc(sim.well, 120.0 - r, 0.0, TAU, 40, Color(0.7, 0.55, 1.0, (r / 120.0) * 0.35), 3.0, true)
+			canvas.draw_circle(sim.well, 14.0, Color(0.05, 0.02, 0.12))
+			canvas.draw_arc(sim.well, 14.0, 0.0, TAU, 24, Color(0.7, 0.55, 1.0), 3.0, true)
+
+
+## Linked pairs are tied with a dotted line, so it is clear they share their damage.
+func _draw_chains() -> void:
+	for block in sim.unique_blocks():
+		if not block.has("link") or int(block["id"]) > int(block["link"]):
+			continue
+		var twin: Variant = sim.block_by_id(int(block["link"]))
+		if twin == null:
+			continue
+		var from := sim.block_rect(block).get_center()
+		var to := sim.block_rect(twin).get_center()
+		var steps := int(from.distance_to(to) / 16.0)
+		for i in steps:
+			canvas.draw_circle(from.lerp(to, (i + 0.5) / steps), 3.0, Color(UI.GOLD, 0.7))
+
+
+## Fog hides the colours that tell how much health the top of the field has left.
+func _draw_fog() -> void:
+	if sim.modifier != "fog":
+		return
+	for i in 10:
+		var y := GameSim.FIELD_Y + i * 36.0
+		var drift := sin(time * 0.6 + i) * 30.0
+		canvas.draw_rect(Rect2(GameSim.FIELD_X - 10.0 + drift, y, GameSim.FIELD_W + 20.0, 40.0), Color(0.75, 0.75, 0.85, 0.16 * (1.0 - i / 12.0)))
+
+
 ## Furniture is dark and flat, so it never reads as something to break.
 func _draw_obstacles() -> void:
 	for entry: Dictionary in sim.obstacles.values():
-		_draw_obstacle(String(entry["kind"]), sim.cell_rect(entry["cell"]), float(entry["pulse"]), int(entry["dir"]))
+		_draw_obstacle(String(entry["kind"]), sim.cell_rect(entry["cell"]), float(entry["pulse"]), int(entry["dir"]), bool(entry.get("open", false)), int(entry.get("hits", GameSim.KEY_HITS)))
 
 
-func _draw_obstacle(kind: String, rect: Rect2, pulse: float, dir := 1) -> void:
+func _draw_obstacle(kind: String, rect: Rect2, pulse: float, dir := 1, open := false, hits := GameSim.KEY_HITS) -> void:
 	var edge := OBSTACLE_EDGE.lerp(Color.WHITE, pulse)
 	var c := rect.get_center()
 	match kind:
+		"gate":
+			if open:
+				panel(rect, Color.TRANSPARENT, 8.0, Color(UI.MINT, 0.35), 2)
+				return
+			panel(rect, OBSTACLE_BODY, 8.0, UI.MINT.lerp(Color.WHITE, pulse), 3)
+			for i in 4:
+				var x := rect.position.x + rect.size.x * (i + 1) / 5.0
+				canvas.draw_line(Vector2(x, rect.position.y + 6.0), Vector2(x, rect.end.y - 6.0), Color(UI.MINT, 0.7), 3.0)
+			return
+		"switch":
+			canvas.draw_circle(c, 22.0, OBSTACLE_BODY)
+			canvas.draw_arc(c, 22.0, 0.0, TAU, 28, UI.MINT.lerp(Color.WHITE, pulse), 4.0, true)
+			canvas.draw_circle(c, 9.0 + pulse * 4.0, UI.MINT)
+			return
+		"door":
+			panel(rect, Color("3a2a1c"), 6.0, Color("c9a86a"), 3)
+			canvas.draw_circle(c + Vector2(0.0, -4.0), 6.0, Color("17122b"))
+			canvas.draw_rect(Rect2(c + Vector2(-3.0, 0.0), Vector2(6.0, 12.0)), Color("17122b"))
+			return
+		"key":
+			panel(rect.grow(-6.0), Color(UI.GOLD, 0.15 + pulse * 0.3), 10.0, UI.GOLD, 3)
+			canvas.draw_arc(c + Vector2(-14.0, 0.0), 10.0, 0.0, TAU, 20, UI.GOLD, 4.0, true)
+			canvas.draw_line(c + Vector2(-4.0, 0.0), c + Vector2(22.0, 0.0), UI.GOLD, 4.0)
+			canvas.draw_line(c + Vector2(14.0, 0.0), c + Vector2(14.0, 8.0), UI.GOLD, 4.0)
+			for i in hits:
+				canvas.draw_circle(rect.position + Vector2(14.0 + i * 10.0, rect.size.y - 10.0), 3.0, UI.GOLD)
+			return
 		"bumper":
 			var r := GameSim.BUMPER_RADIUS + pulse * 7.0
 			soft_glow(c, Vector2.ONE * (r * 3.0), Color(UI.STAR, 0.18 + pulse * 0.5))
@@ -2047,6 +2164,10 @@ func _draw_block_body(kind: String, rect: Rect2, color: Color, border := Color.T
 			canvas.draw_circle(c, 8.0, Color.WHITE)
 		"elite":
 			PerkArt.draw_glyph(canvas, "crown", c, 15.0, UI.INK)
+		"coin":
+			PerkArt.draw_glyph(canvas, "coin", c, 13.0, UI.INK)
+		"part":
+			PerkArt.draw_glyph(canvas, "gear", c, 15.0, UI.INK)
 		"bounty":
 			canvas.draw_circle(c, 15.0, UI.INK)
 			canvas.draw_circle(c, 10.0, UI.GOLD)
@@ -2079,7 +2200,7 @@ func draw_block_icon(kind: String, rect: Rect2) -> void:
 	if kind == "boss":
 		BossArt.draw(canvas, "purun", rect, "idle", time)
 		return
-	if kind in ["wall", "mover", "bumper", "ramp_l", "portal"]:
+	if kind in ["wall", "mover", "bumper", "ramp_l", "portal", "gate", "switch", "door", "key"]:
 		_draw_obstacle(kind, rect, 0.0)
 		return
 	if kind.begins_with("skin_") or kind.begins_with("trail_") or kind.begins_with("sky_"):
@@ -2168,8 +2289,11 @@ func _draw_balls() -> void:
 	var base := _ball_color()
 	var radius := sim.ball_radius
 	var heated := base.lerp(_combo_color(sim.combo), minf(sim.combo / TRAIL_COLOR_FULL_COMBO, 0.5))
+	var second := Color(String(Balls.BALLS[sim.second_ball]["color"])) if sim.second_ball != "" else heated
 	for ball in sim.balls:
-		var color: Color = heated.lerp(UI.STAR, 0.5) if ball.temp else heated
+		var color: Color = second if ball.alt else heated
+		if ball.temp:
+			color = color.lerp(UI.STAR, 0.5)
 		_draw_ball_shape(ball.pos, radius, color)
 
 
@@ -2358,6 +2482,12 @@ func _draw_event_screen() -> void:
 		elif option.has("relic"):
 			var data: Dictionary = RunContent.RELICS[option["relic"]]
 			_draw_option_card(rect, data["glyph"], t("relic_" + String(option["relic"])), t("relic_%s_desc" % String(option["relic"])), UI.GOLD, alpha)
+			var completes := sim.set_completed_by(option["relic"])
+			if completes != "":
+				text_right(Vector2(rect.end.x - 24.0, rect.position.y + 30.0), t("set_ready") % t(completes), 22, Color(UI.MINT, alpha), font_body)
+		elif option.has("forge"):
+			_draw_card(option["forge"], rect, alpha)
+			text_right(Vector2(rect.end.x - 24.0, rect.position.y + 30.0), t("forge_hint"), 22, Color(UI.GOLD, alpha), font_body)
 		else:
 			var key := "shrine_%s_%s" % [String(option["shrine"]), String(option["choice"])]
 			_draw_option_card(rect, "crown", t(key), t(key + "_desc"), UI.STAR, alpha)
@@ -2557,9 +2687,11 @@ func _build_audio() -> void:
 		var player := AudioStreamPlayer.new()
 		add_child(player)
 		players.append(player)
-	music_player = AudioStreamPlayer.new()
-	music_player.volume_db = MUSIC_VOLUME_DB
-	add_child(music_player)
+	for i in 3:
+		var layer := AudioStreamPlayer.new()
+		layer.volume_db = MUSIC_VOLUME_DB
+		add_child(layer)
+		music_players.append(layer)
 
 
 func _play(id: String, pitch: float) -> void:
