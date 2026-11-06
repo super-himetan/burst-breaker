@@ -4,6 +4,8 @@
 
 狙いたい場所を指して玉を発射します。Mac はカーソルで狙ってクリック、スマホは指で触れて狙い、離すと発射します。
 
+ブラウザ版: https://super-himetan.github.io/burst-breaker/
+
 ## やり込み要素
 
 - 左右対称の隊列で降りてくる、形の違うブロックと、壁やバンパーなどの仕掛け
@@ -37,6 +39,14 @@
 
 ```bash
 mkdir -p build/macos && touch build/.gdignore && /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release macOS build/macos/BurstBreaker.app
+```
+
+## Web 版の公開
+
+`build/web/` に書き出し、その中身を `gh-pages` ブランチに置くと GitHub Pages に反映されます。Web には OS の日本語フォントがないため、`fonts/` に同梱した Noto Sans JP（OFL）を使います。新しい文字を足したら `tools/subset_font.py` で作り直します。
+
+```bash
+mkdir -p build/web && touch build/.gdignore && /Applications/Godot.app/Contents/MacOS/Godot --headless --path . --export-release Web build/web/index.html
 ```
 
 ## iOS への書き出し
